@@ -1,0 +1,21 @@
+{
+  "id": "rasa_tamil_female_book_00014",
+  "display_name": "Tamil narration — Rasa (female)",
+  "audio": "reference.wav",
+  "transcript_file": "transcript.txt",
+  "audio_sha256": "8444fc8c0c3753bb73c2ff9bedaf33162115d81e7eeb53b516e515558b055224",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://huggingface.co/datasets/ai4bharat/Rasa",
+  "source_revision": "632f55c7ac590219d41cd7adffce5b440e4604f5",
+  "source_config": "Tamil",
+  "source_split": "test",
+  "source_row_index": 16,
+  "source_sample_id": "TAM_F_BOOK_00014",
+  "duration_seconds": 5.066,
+  "attribution": "Rasa: Building Expressive Speech Synthesis Systems for Indian Languages in Low-resource Settings. Praveen Srinivasa Varadhan, Ashwin Sankar, Giri Raju, Mitesh M. Khapra / AI4Bharat, INTERSPEECH 2024.",
+  "permission_basis": "Publisher releases this expressive TTS dataset under CC-BY-4.0; user accepted gated access. Used for its documented speech-synthesis purpose with attribution. No endorsement is implied.",
+  "changes": "One complete source clip retrieved through the official dataset viewer; no trimming, transcript editing or voice training. Runtime cache decodes to mono 24 kHz PCM.",
+  "quality_review": "Narration-style dataset sample; human review of pronunciation and suitability remains required.",
+  "transcript_sha256": "084fa75c61e15b30a8c9a7367dced4369489e986e46e9c3ce8c7ace78196e277"
+}

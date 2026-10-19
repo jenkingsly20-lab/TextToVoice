@@ -1,0 +1,23 @@
+{
+  "id": "rasa_tam_f_conv_02748",
+  "display_name": "Tamil female — conversational style",
+  "audio": "reference.wav",
+  "transcript_file": "transcript.txt",
+  "audio_sha256": "4ac08ff72dff57164615ee4c5c753004bd9b2dca9805a89177cf610d96f5502b",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://huggingface.co/datasets/ai4bharat/Rasa",
+  "source_revision": "632f55c7ac590219d41cd7adffce5b440e4604f5",
+  "source_config": "Tamil",
+  "source_split": "test",
+  "source_row_index": 24,
+  "source_sample_id": "TAM_F_CONV_02748",
+  "duration_seconds": 5.784,
+  "attribution": "Rasa: Building Expressive Speech Synthesis Systems for Indian Languages in Low-resource Settings. Praveen Srinivasa Varadhan, Ashwin Sankar, Giri Raju, Mitesh M. Khapra / AI4Bharat, INTERSPEECH 2024.",
+  "permission_basis": "Publisher releases this expressive TTS dataset under CC-BY-4.0; user accepted gated access. Used for its documented speech-synthesis purpose with attribution. No endorsement is implied.",
+  "changes": "One complete source clip retrieved through the official dataset viewer; no trimming, transcript editing or voice training. Runtime cache decodes to mono 24 kHz PCM.",
+  "quality_review": "Source reference only; generated voice quality awaits user review.",
+  "transcript_sha256": "9615ca50b78192a2b222d7e372df2aa21962b84ff8979856c3bf479445af6dc6",
+  "gender": "Female",
+  "style": "CONV"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "rasa_tam_f_news_00621",
+  "display_name": "Tamil female — news style",
+  "audio": "reference.wav",
+  "transcript_file": "transcript.txt",
+  "audio_sha256": "3761890e4b425d6f0d1f17a7fcb51ed15fc9885e3878c1bc480d9ce13ddb6d6b",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://huggingface.co/datasets/ai4bharat/Rasa",
+  "source_revision": "632f55c7ac590219d41cd7adffce5b440e4604f5",
+  "source_config": "Tamil",
+  "source_split": "test",
+  "source_row_index": 77,
+  "source_sample_id": "TAM_F_NEWS_00621",
+  "duration_seconds": 6.603,
+  "attribution": "Rasa: Building Expressive Speech Synthesis Systems for Indian Languages in Low-resource Settings. Praveen Srinivasa Varadhan, Ashwin Sankar, Giri Raju, Mitesh M. Khapra / AI4Bharat, INTERSPEECH 2024.",
+  "permission_basis": "Publisher releases this expressive TTS dataset under CC-BY-4.0; user accepted gated access. Used for its documented speech-synthesis purpose with attribution. No endorsement is implied.",
+  "changes": "One complete source clip retrieved through the official dataset viewer; no trimming, transcript editing or voice training. Runtime cache decodes to mono 24 kHz PCM.",
+  "quality_review": "Source reference only; generated voice quality awaits user review.",
+  "transcript_sha256": "e563d8bf5b2cd667d3e24ab658a683a2f326d0c6cbb49415e102ca735f3b3641",
+  "gender": "Female",
+  "style": "NEWS"
+}

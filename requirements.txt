@@ -1,0 +1,4 @@
+gradio==5.50.0
+numpy==2.2.6
+pytest==8.4.2
+indic-numtowords==1.1.0

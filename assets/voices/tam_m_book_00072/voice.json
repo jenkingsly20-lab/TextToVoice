@@ -1,0 +1,23 @@
+{
+  "id": "rasa_tam_m_book_00072",
+  "display_name": "Tamil male — narration",
+  "audio": "reference.wav",
+  "transcript_file": "transcript.txt",
+  "audio_sha256": "1a673507ff546c5c38e0ddb9bcc276ce9e22914f92f8a8081306a45297669d50",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://huggingface.co/datasets/ai4bharat/Rasa",
+  "source_revision": "632f55c7ac590219d41cd7adffce5b440e4604f5",
+  "source_config": "Tamil",
+  "source_split": "test",
+  "source_row_index": 2236,
+  "source_sample_id": "TAM_M_BOOK_00072",
+  "duration_seconds": 4.979,
+  "attribution": "Rasa: Building Expressive Speech Synthesis Systems for Indian Languages in Low-resource Settings. Praveen Srinivasa Varadhan, Ashwin Sankar, Giri Raju, Mitesh M. Khapra / AI4Bharat, INTERSPEECH 2024.",
+  "permission_basis": "Publisher releases this expressive TTS dataset under CC-BY-4.0; user accepted gated access. Used for its documented speech-synthesis purpose with attribution. No endorsement is implied.",
+  "changes": "One complete source clip retrieved through the official dataset viewer; no trimming, transcript editing or voice training. Runtime cache decodes to mono 24 kHz PCM.",
+  "quality_review": "Source reference only; generated voice quality awaits user review.",
+  "transcript_sha256": "38f5578eeb579cc1084aaca71dc1f59ae258e79f3e910c123fc4dbc9a145c5cd",
+  "gender": "Male",
+  "style": "BOOK"
+}
