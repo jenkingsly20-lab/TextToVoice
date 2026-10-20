@@ -12,7 +12,7 @@ Stopping and resuming:
 
 Examples:
     .\\.venv\\Scripts\\python.exe batch_generate.py --books john,matthew
-    .\\.venv\\Scripts\\python.exe batch_generate.py --books nt
+    .\\.venv\\Scripts\\python.exe batch_generate.py --books nt --voices male,female
     .\\.venv\\Scripts\\python.exe batch_generate.py --books john --chapters 1-5
     .\\.venv\\Scripts\\python.exe batch_generate.py --list-books
 """
@@ -35,6 +35,7 @@ from services.chapter_plan import BOOK_IDS
 DEFAULT_DB = config.ROOT / '.venv-indicf5' / 'BibleDB' / 'tamil.db'
 DEFAULT_OUT = config.OUTPUTS / 'batch'
 SECONDS_PER_VERSE_GUESS = 3.0
+VOICE_ALIASES = {'female': 'default', 'male': 'rasa_tam_m_book_00072'}
 GROUPS = {'nt': range(40, 67), 'ot': range(1, 40), 'all': range(1, 67)}
 
 def open_db(path):
@@ -87,7 +88,7 @@ def write_index(folder, number, name, identifier, quality):
     for manifest in sorted(folder.glob(f'{identifier}_*.json')):
         data = json.loads(manifest.read_text(encoding='utf-8'))
         chapters.append(dict(chapter=data['chapter'], audio_filename=data['audio_filename'],
-            metadata_filename=manifest.name, verse_count=len(data['verses']),
+            metadata_filename=manifest.name, verse_count=len(data['verses']), voice=data['settings'].get('voice'),
             duration_ms=data['total_duration_ms'], generation_seconds=round(data['elapsed_seconds'], 1)))
     index = dict(book_number=number, book_name=name, book_id=identifier, quality=quality,
                  updated_utc=datetime.now(timezone.utc).isoformat(), chapters=chapters)
@@ -122,7 +123,8 @@ def main():
     parser.add_argument('--db', default=str(DEFAULT_DB), help='Path to tamil.db')
     parser.add_argument('--out', default=str(DEFAULT_OUT), help='Output folder (a sub-folder per book)')
     parser.add_argument('--quality', default=DEFAULT_QUALITY, choices=list(QUALITY_PRESETS))
-    parser.add_argument('--voice', default='default', help='Installed voice id (default Tamil voice)')
+    parser.add_argument('--voice', default='default', help='Voice for every book: female, male or an installed voice id')
+    parser.add_argument('--voices', help='Alternate voices book by book, e.g. male,female (Matthew male, Mark female, …)')
     parser.add_argument('--force', action='store_true', help='Regenerate chapters that already exist')
     parser.add_argument('--list-books', action='store_true')
     args = parser.parse_args()
@@ -138,8 +140,17 @@ def main():
 
     # Plan every chapter up front so progress and time left cover the whole run.
     out = Path(args.out)
+    voices = [VOICE_ALIASES.get(v.strip(), v.strip()) for v in (args.voices or args.voice).split(',') if v.strip()]
+    from services.default_voice import installed_voice_configs
+    unknown = [v for v in voices if v not in installed_voice_configs()]
+    if unknown:
+        sys.exit(f'Unknown voice(s) {unknown}. Use female, male or one of: {", ".join(installed_voice_configs())}')
     jobs, skipped = [], 0
-    for number, name, identifier in resolve_books(db, args.books):
+    # Voices rotate by the book's position in --books, so a resumed run keeps the same assignment.
+    for position, (number, name, identifier) in enumerate(resolve_books(db, args.books)):
+        voice = voices[position % len(voices)]
+        if len(voices) > 1:
+            print(f'{identifier:16s} {"male" if voice == VOICE_ALIASES["male"] else "female" if voice == "default" else voice}')
         available = [c for (c,) in db.execute('select distinct chNum from words where bookNum=? order by chNum', (number,))]
         for chapter in parse_chapters(args.chapters, available):
             stem = f'{identifier}_{chapter:02d}'
@@ -150,7 +161,7 @@ def main():
                 continue
             verses = db.execute('select count(*) from words where bookNum=? and chNum=?', (number, chapter)).fetchone()[0]
             jobs.append(dict(number=number, name=name, identifier=identifier, chapter=chapter, stem=stem,
-                             folder=folder, verses=verses))
+                             folder=folder, verses=verses, voice=voice))
     total = len(jobs) + skipped
     print(f'{total} chapter(s) selected: {skipped} already done, {len(jobs)} to generate  [{args.quality}]')
     print(f'Output: {out.resolve()}')
@@ -184,7 +195,7 @@ def main():
                 state['fraction'], state['desc'] = fraction, desc
             def work():
                 try:
-                    state['result'] = generate(text, 'indicf5', voice=args.voice, output_root=out / '.work',
+                    state['result'] = generate(text, 'indicf5', voice=job['voice'], output_root=out / '.work',
                         quality=args.quality, input_format='Verse-numbered Bible text', progress=progress)
                 except Exception as exc:
                     state['error'] = exc
