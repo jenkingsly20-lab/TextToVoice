@@ -139,6 +139,7 @@ def main():
     parser.add_argument('--voice', default='default', help='Voice for every book: female, male or an installed voice id')
     parser.add_argument('--voices', help='Alternate voices book by book, e.g. male,female (Matthew male, Mark female, …)')
     parser.add_argument('--force', action='store_true', help='Regenerate chapters that already exist')
+    parser.add_argument('--retries', type=int, default=2, help='Extra immediate attempts for a failed chapter (default 2)')
     parser.add_argument('--allow-sleep', action='store_true', help='Let Windows sleep/turn off the screen during the run')
     parser.add_argument('--list-books', action='store_true')
     args = parser.parse_args()
@@ -201,16 +202,31 @@ def main():
 
     all_verses = sum(job['verses'] for job in jobs)
     verses_done, seconds_generating, done, failed = 0, 0.0, 0, []
+    failure_log = out / 'failed_chapters.log'
+    def log_failure(job, attempt, error):
+        out.mkdir(parents=True, exist_ok=True)
+        with failure_log.open('a', encoding='utf-8') as stream:
+            stream.write(f'{datetime.now().isoformat(timespec="seconds")}  {job["stem"]}  attempt {attempt}  {error}\n')
+    # Each chapter gets 1 + --retries attempts in a row; chapters that still fail get
+    # one final attempt after all other chapters. Saved pieces make retries cheap.
+    queue = [(job, 1) for job in jobs]
+    deferred, final_pass = [], False
     started = time.perf_counter()
     try:
-        for position, job in enumerate(jobs, 1):
+        while queue or (deferred and not final_pass):
             if stop['requests']:
                 break
+            if not queue:
+                final_pass = True
+                queue = [(job, args.retries + 2) for job in deferred]
+                display.line(f'>> Final retry for {len(deferred)} failed chapter(s): {", ".join(j["stem"] for j in deferred)}')
+                deferred = []
+            job, attempt = queue.pop(0)
             job['folder'].mkdir(parents=True, exist_ok=True)
             text, verse_count = chapter_text(db, job['number'], job['name'], job['chapter'])
-            state = dict(fraction=0.0, desc='loading model' if position == 1 else 'starting', result=None, error=None)
+            state = dict(fraction=0.0, result=None, error=None)
             def progress(fraction, desc=''):
-                state['fraction'], state['desc'] = fraction, desc
+                state['fraction'] = fraction
             def work():
                 try:
                     state['result'] = generate(text, 'indicf5', voice=job['voice'], output_root=out / '.work',
@@ -220,6 +236,7 @@ def main():
             measured = time.perf_counter()
             thread = threading.Thread(target=work, daemon=True)
             thread.start()
+            label = job['stem'] + (f' (try {attempt})' if attempt > 1 else '')
             while thread.is_alive():
                 thread.join(0.5)  # short waits keep Ctrl+C responsive on Windows
                 rate = seconds_generating / verses_done if verses_done else SECONDS_PER_VERSE_GUESS
@@ -227,18 +244,28 @@ def main():
                 left = max(0.0, (all_verses - current) * rate)
                 overall = (skipped + done + state['fraction']) / total
                 display.status(f'{bar(overall)} {overall*100:5.1f}%  {skipped + done}/{total} chapters  '
-                               f'| {job["stem"]} {state["fraction"]*100:3.0f}%  | elapsed {clock(time.perf_counter()-started)}'
+                               f'| {label} {state["fraction"]*100:3.0f}%  | elapsed {clock(time.perf_counter()-started)}'
                                f'  left ~{clock(left)}')
             elapsed = time.perf_counter() - measured
-            if state['error'] is not None:
-                failed.append(job['stem'])
-                display.line(f'x {job["stem"]}  FAILED: {state["error"]}')
-                continue
-            _, produced, _, record = state['result']
-            if (record['book_id'] != job['identifier'] or record['chapter'] != job['chapter']
-                    or len(record['verses']) != verse_count):
-                failed.append(job['stem'])
-                display.line(f'x {job["stem"]}  FAILED: heading or verse timing did not match the database')
+            error = state['error']
+            if error is None:
+                _, produced, _, record = state['result']
+                if (record['book_id'] != job['identifier'] or record['chapter'] != job['chapter']
+                        or len(record['verses']) != verse_count):
+                    error = 'heading or verse timing did not match the database'
+            if error is not None:
+                log_failure(job, attempt, error)
+                if attempt <= args.retries:
+                    display.line(f'! {job["stem"]}  attempt {attempt} failed: {error}  -> retrying now')
+                    if registry.current is not None:
+                        registry.current.unload()  # start the retry with a fresh GPU worker
+                    queue.insert(0, (job, attempt + 1))
+                elif not final_pass:
+                    display.line(f'! {job["stem"]}  failed {attempt} times: {error}  -> will retry once more at the end')
+                    deferred.append(job)
+                else:
+                    failed.append(job['stem'])
+                    display.line(f'x {job["stem"]}  FAILED after all retries: {error}')
                 continue
             mp3, manifest = job['folder'] / f'{job["stem"]}.mp3', job['folder'] / f'{job["stem"]}.json'
             record['output_directory'] = str(job['folder'].resolve())
@@ -252,7 +279,7 @@ def main():
             verses_done += job['verses']
             seconds_generating += elapsed
             overall = (skipped + done) / total
-            display.line(f'ok {job["stem"]}  {verse_count} verses, {record["duration_seconds"]/60:.1f} min audio, '
+            display.line(f'ok {label}  {verse_count} verses, {record["duration_seconds"]/60:.1f} min audio, '
                          f'made in {clock(elapsed)}   [{skipped + done}/{total} chapters, {overall*100:.1f}%]')
     except KeyboardInterrupt:
         display.line('>> Stopped immediately. Pieces already generated are kept; run the same command to resume.')
@@ -269,8 +296,9 @@ def main():
           f'Done {skipped + done}/{total}; {remaining} to go.')
     if stop['requests'] and remaining:
         print('Stopped on request. Run the same command again to continue.')
-    if failed:
-        print(f'Failed: {", ".join(failed)} (run again to retry)')
+    if failed or deferred:
+        print(f'Failed: {", ".join(failed + [j["stem"] for j in deferred])} '
+              f'(details in {failure_log}; run the same command again to retry)')
         sys.exit(1)
 
 if __name__ == '__main__':

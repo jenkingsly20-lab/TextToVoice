@@ -142,6 +142,7 @@ Run from `C:\John\TextToVoice` on the `perf-improvements` branch (or `main` once
 - **Ctrl+C once:** finishes the current chapter, then stops.
 - **Ctrl+C twice:** stops immediately and kills the GPU worker. Chunks already generated are kept.
 - **Run the same command again:** finished chapters are skipped, and a half-done chapter resumes from its cached chunks.
+- **Automatic retries:** a failed chapter is retried straight away, up to `--retries` more times (default 2), each time with a fresh GPU worker. Saved pieces make retries fast. A chapter that still fails gets one final try after all the other chapters. Every failure is logged, with time, attempt and error, in `outputs\batch\failed_chapters.log`.
 - **A chapter counts as finished only when both its MP3 and JSON exist.** The JSON is written last, through a temporary file.
 - Existing chapters are never overwritten unless you pass `--force`.
 
