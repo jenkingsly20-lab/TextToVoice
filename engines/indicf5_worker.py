@@ -26,6 +26,7 @@ VOCOS_REVISION = '0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21'
 FRAME_BUDGET = int(os.getenv('TAMIL_TTS_FRAME_BUDGET', '12000'))
 MAX_BATCH = int(os.getenv('TAMIL_TTS_MAX_BATCH', '8'))
 MAX_SECONDS = 30
+GPU_MEMORY_FRACTION = float(os.getenv('TAMIL_TTS_GPU_MEMORY_FRACTION', '0.8'))
 
 def respond(data):
     protocol_out.write(json.dumps(data, ensure_ascii=True) + '\n')
@@ -47,6 +48,11 @@ def main():
     torch.backends.cudnn.allow_tf32 = True
     requested = sys.argv[1] if len(sys.argv) > 1 else 'Auto'
     device = 'cpu' if requested == 'CPU' else ('cuda' if torch.cuda.is_available() else 'cpu')
+    if device == 'cuda':
+        # Near the VRAM limit the Windows driver silently spills into much slower shared
+        # system memory instead of failing. Capping PyTorch's share turns that into an
+        # out-of-memory error, which run() handles by halving the sub-batch.
+        torch.cuda.set_per_process_memory_fraction(GPU_MEMORY_FRACTION)
     model_dir = ROOT / 'model_cache' / 'models--ai4bharat--IndicF5' / 'snapshots' / MODEL_REVISION
     vocos_dir = ROOT / 'model_cache' / 'models--charactr--vocos-mel-24khz' / 'snapshots' / VOCOS_REVISION
     vocoder = Vocos.from_hparams(str(vocos_dir / 'config.yaml'))
@@ -237,11 +243,14 @@ def main():
             written_at = time.perf_counter()
             for audio, output in zip(pcm, request['outputs']):
                 np.save(output, audio)
+            peak_vram_bytes = torch.cuda.max_memory_allocated() if device == 'cuda' else 0
+            if device == 'cuda':
+                torch.cuda.empty_cache()  # release cached blocks so varied batch shapes do not hoard VRAM
             respond({'ok': True, 'device': device, 'sample_rate': 24000, 'steps': steps, 'precision': precision,
                      'cfg_strength': cfg_strength, 'seed': seed, 'batch_size': len(texts), 'sub_batches': sub_batches,
                      'reference_audio_prepare_ms':audio_prepare_ms,'synthesis_wall_ms':synthesis_wall_ms,
                      'gpu_elapsed_ms':gpu_elapsed_ms,'temporary_chunk_write_ms':(time.perf_counter()-written_at)*1000,
-                     'peak_vram_bytes': torch.cuda.max_memory_allocated() if device == 'cuda' else 0,
+                     'peak_vram_bytes': peak_vram_bytes,
                      'duration_seconds': [len(audio) / 24000 for audio in pcm]})
         except Exception as exc:
             if device == 'cuda':

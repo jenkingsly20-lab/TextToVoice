@@ -77,6 +77,17 @@ The CUDA package index line (`--extra-index-url https://download.pytorch.org/whl
 
 Generates whole books from the Tamil SQLite Bible database. See the next section.
 
+### 8. Fixes from the first overnight New Testament run
+
+| Problem seen | Cause | Fix |
+|---|---|---|
+| No progress from 22:36 to 07:59 | The laptop entered **Modern Standby** when the screen turned off. Setting sleep to "Never" does not prevent this on Modern Standby laptops. | `batch_generate.py` now asks Windows to stay awake and keeps the screen on while it runs (`SetThreadExecutionState`). Use `--allow-sleep` to turn this off. Closing the lid can still sleep the laptop. |
+| `matthew_08`, `matthew_15`: "heading or verse timing did not match" | The MP3 decoded 15 samples (0.3 ms) longer than the PCM, from encoder end padding. The timing check required an exact match. | Up to one MPEG frame (1152 samples, 24 ms) of extra tail is accepted. Missing samples are still rejected. (`services/audio.py`) |
+| `mark_09`: `[WinError 5] Access is denied` on a cache rename | Windows (antivirus/indexer) briefly locked a newly written file. | Renames retry for up to 5 s (`replace_with_retry`). |
+| Some chapters took 5–6 min instead of ~2; VRAM at 7.9 of 8 GB | Near the limit, the Windows driver silently moves data into slow shared system memory instead of failing. | The worker caps PyTorch at 80% of VRAM (`TAMIL_TTS_GPU_MEMORY_FRACTION`), so it gets a normal out-of-memory error and halves the batch instead. It also releases cached memory after each request. |
+
+Failed chapters are not saved, so re-running the same command regenerates them automatically.
+
 ## How it was verified
 
 - **Equivalence with upstream F5-TTS** (fp32, 32 steps, same seed): waveform correlation 0.9994 for the longest item.

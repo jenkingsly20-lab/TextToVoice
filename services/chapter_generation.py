@@ -27,6 +27,16 @@ DEFAULT_QUALITY = next(iter(QUALITY_PRESETS))
 BATCH_CHUNKS = 8  # chunks per worker request (= worker MAX_BATCH); smaller keeps progress updates frequent
 SEED = 1234
 
+def replace_with_retry(source, destination, attempts=20, delay=0.25):
+    """Path.replace that waits out a brief Windows lock (antivirus/indexer: WinError 5/32)."""
+    for attempt in range(attempts):
+        try:
+            return Path(source).replace(destination)
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
 def chunk_cache_key(chunk, options, reference_digest):
     identity = dict(text=chunk, reference=reference_digest, reference_text=options.get('reference_text', ''),
         steps=options.get('steps'), precision=options.get('precision'), seed=options.get('seed'),
@@ -79,7 +89,7 @@ def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None)
             if cache_dir is not None:
                 temporary = cache_dir / (keys[i] + '.tmp.npz')
                 np.savez(temporary, pcm=out.pcm, rate=out.sample_rate, device=out.device, version=out.version)
-                temporary.replace(cache_dir / (keys[i] + '.npz'))
+                replace_with_retry(temporary, cache_dir / (keys[i] + '.npz'))
         done += len(group)
     return results, records, metrics, [cache_dir / (key + '.npz') for key in keys] if cache_dir is not None else []
 

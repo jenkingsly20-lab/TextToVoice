@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
-from services.chapter_generation import generate, registry, QUALITY_PRESETS, DEFAULT_QUALITY
+from services.chapter_generation import generate, registry, replace_with_retry, QUALITY_PRESETS, DEFAULT_QUALITY
 from services.chapter_plan import BOOK_IDS
 
 DEFAULT_DB = config.ROOT / '.venv-indicf5' / 'BibleDB' / 'tamil.db'
@@ -116,6 +116,19 @@ class Display:
         sys.stdout.flush()
         self.width = 0
 
+def keep_awake(enabled):
+    """Stop Windows sleeping or entering Modern Standby while the batch runs.
+
+    On Modern Standby laptops, sleep set to Never does not prevent standby when the
+    screen turns off, so the display is kept on too (it can be dimmed). The request
+    ends automatically when this program exits."""
+    if os.name != 'nt':
+        return
+    import ctypes
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED, ES_DISPLAY_REQUIRED = 0x80000000, 0x00000001, 0x00000002
+    flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if enabled else 0)
+    ctypes.windll.kernel32.SetThreadExecutionState(flags)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--books', help='Comma-separated: john,matthew or 43,40 or Tamil names; nt / ot / all')
@@ -126,6 +139,7 @@ def main():
     parser.add_argument('--voice', default='default', help='Voice for every book: female, male or an installed voice id')
     parser.add_argument('--voices', help='Alternate voices book by book, e.g. male,female (Matthew male, Mark female, …)')
     parser.add_argument('--force', action='store_true', help='Regenerate chapters that already exist')
+    parser.add_argument('--allow-sleep', action='store_true', help='Let Windows sleep/turn off the screen during the run')
     parser.add_argument('--list-books', action='store_true')
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')  # Tamil names on the Windows console
@@ -168,7 +182,11 @@ def main():
     if not jobs:
         print('Nothing to do.')
         return
-    print('Ctrl+C once = stop after this chapter · twice = stop now · run again to resume\n')
+    print('Ctrl+C once = stop after this chapter · twice = stop now · run again to resume')
+    if not args.allow_sleep:
+        keep_awake(True)
+        print('Keeping Windows awake (screen stays on; you may dim it). Closing the lid can still sleep.')
+    print()
 
     stop = {'requests': 0}
     def on_interrupt(signum, frame):
@@ -227,7 +245,7 @@ def main():
             temporary = manifest.with_suffix('.json.tmp')
             temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')
             shutil.copyfile(produced, mp3)
-            temporary.replace(manifest)  # JSON last: a chapter counts as done only when both files exist
+            replace_with_retry(temporary, manifest)  # JSON last: a chapter counts as done only when both files exist
             shutil.rmtree(Path(produced).parent, ignore_errors=True)
             write_index(job['folder'], job['number'], job['name'], job['identifier'], args.quality)
             done += 1

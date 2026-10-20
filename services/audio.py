@@ -74,6 +74,8 @@ def encode_mp3(wav, output=None, bitrate_kbps=None):
     except (subprocess.SubprocessError, OSError) as exc:
         return None, f'MP3 encoding failed: {exc}'
 
+MP3_TAIL_TOLERANCE_SAMPLES = 1152  # one MPEG-1 Layer III frame (24 ms at 48 kHz)
+
 def inspect_mp3_timeline(path, source_samples, source_rate):
     """Verify the standard gapless decoded timeline, never infer alignment from text."""
     result = dict(verified=False,playback_sample_rate=48000,requires_gapless_player=True,
@@ -106,7 +108,11 @@ def inspect_mp3_timeline(path, source_samples, source_rate):
             decoded_duration_ms=round(count*1000/rate),encoder_skip_samples=skip,
             encoder_skip_ms=skip*1000/rate,container_start_time_seconds=float(stream.get('start_time',0)),
             measured_bitrate_bps=int(stream.get('bit_rate',0)),decoder='FFmpeg',
-            verified=(count==expected and skip>0 and stream.get('codec_name')=='mp3'))
+            decoded_length_difference_samples=count-expected,
+            # The encoder can leave a few samples of padding at the very end (seen: 15
+            # samples, 0.3 ms). That cannot move verse start times, so up to one MPEG
+            # frame of extra tail is accepted; missing samples are never accepted.
+            verified=(0 <= count-expected <= MP3_TAIL_TOLERANCE_SAMPLES and skip>0 and stream.get('codec_name')=='mp3'))
         if not result['verified']:
             result['limitation'] = 'Decoded length or encoder-delay metadata did not match the PCM timeline; verse highlighting is withheld.'
     except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError) as exc:
