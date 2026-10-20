@@ -12,10 +12,18 @@ ORDINAL = {1:'முதலாம்',2:'இரண்டாம்',3:'மூன�
 def cardinal(number):
     return num2words(number,lang='ta').replace('\u200c','').strip()
 
+# num2words returns joined, partly colloquial/misspelled single words for 91–99
+# (e.g. 98 -> தொண்ணூரெட்டு), so these ordinals are spelled out explicitly.
+ORDINAL.update({91:'தொண்ணூற்றொன்றாம்',92:'தொண்ணூற்றிரண்டாம்',95:'தொண்ணூற்றைந்தாம்',
+    96:'தொண்ணூற்றாறாம்',97:'தொண்ணூற்றேழாம்',98:'தொண்ணூற்றெட்டாம்',99:'தொண்ணூற்றொன்பதாம்'})
+
 def ordinal(number):
     if number in ORDINAL:
         return ORDINAL[number]
     words = cardinal(number).split()
+    if len(words) == 1:
+        word = words[0]
+        return (word[:-1] + 'ாம்') if word.endswith('ு') else word + 'ஆம்'
     # Join the final component into its ordinal without applying number rules
     # to any scripture words (e.g. இருபத்து மூன்று -> இருபத்துமூன்றாம்).
     tail = number % 100

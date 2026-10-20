@@ -192,6 +192,18 @@ Tips for long runs on a laptop:
 
 ### Old Testament notes
 
+Text fixes made after scanning the whole database before the OT run:
+
+| Found in the database | Where | Handling |
+|---|---|---|
+| HTML entities `&quot;` and `&#39;` | ~20 verses (Leviticus 13:45, 1 Kings 22:15, Psalms 2, 10, 11, 14, 29, 2 Chronicles 30:15) | Decoded when read (`html.unescape`), so the JSON text is clean too |
+| Merged verse numbers `(43)`, `(6)` | 1 Samuel 20:42, Psalm 127:5 | Removed from speech (not read aloud) |
+| Brackets and quotation marks, e.g. `(சேலா)` | ~80 verses, mostly Psalms | Symbols removed from speech; the words are still read |
+| Hyphenated names, e.g. `மகேர்-சாலால்-அஷ்-பாஸ்` | Isaiah 8 | Hyphen read as a short space |
+| Psalm heading crash for 91, 92 and 95–99 (`num2words` returns irregular single words, and misspells 98) | `services/bible_heading.py` | Correct ordinals spelled out explicitly, plus a fallback so no number can crash |
+
+All 1,189 chapters were dry-run through text planning, with no errors and no leftover symbols in the speech text.
+
 - Psalms headings are spoken as "முதலாம் சங்கீதம்" (with no "அதிகாரம்"). Psalm 119 (176 verses) is within the supported range.
 - Very long verses (e.g. Esther 8:9) are split automatically at sentence and clause boundaries.
 - Numbers inside verse text are read as Tamil number words.

@@ -121,3 +121,17 @@ def test_chunk_cache_resumes_and_is_cleared(tmp_path):
     again, records, _, _ = synthesize_all(engine, chunks, options, tmp_path)
     assert len(engine.calls) == 1 and all(r['cache_hit'] for r in records)
     assert [len(r.pcm) for r in again] == [60, 120, 10]
+
+def test_speech_cleanup_of_symbols_and_merged_verse_numbers():
+    plan = prepare_speech_plan('அவன் "தீட்டு" என்றான். (43) பின்பு மகேர்-சாலால் வந்தான். (சேலா)', punctuation_pauses=False)
+    spoken = ''.join(plan['spoken_chunks'])
+    assert '"' not in spoken and '(' not in spoken and ')' not in spoken and '-' not in spoken
+    assert 'நாற்பத்து' not in spoken and '43' not in spoken
+    assert 'மகேர் சாலால்' in spoken and 'சேலா' in spoken
+    assert any(c['reason'].startswith('speech cleanup') for c in plan['changes'])
+
+def test_psalm_headings_for_every_chapter():
+    from services.bible_heading import extract_heading
+    for number in range(1, 151):
+        assert extract_heading(f'சங்கீதம் {number}\n1 x')['spoken'].endswith('சங்கீதம்.')
+    assert extract_heading('சங்கீதம் 98\n1 x')['spoken'] == 'தொண்ணூற்றெட்டாம் சங்கீதம்.'

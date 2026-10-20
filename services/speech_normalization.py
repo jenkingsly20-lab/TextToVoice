@@ -12,6 +12,10 @@ LABEL = re.compile(r'^[ \t]*(?P<number>' + D + r'+)(?:[.)])?[ \t]+')
 TOKEN = re.compile(r'(?<!\w)[+-]?(?:' + D + r'{1,2}(?:,' + D + r'{2})+,' + D + r'{3}|' + D + r'{1,3}(?:,' + D + r'{3})+|' + D + r'+)(?:\.' + D + r'+)?(?!\w)')
 PUNCTUATION = re.compile(r'[;；,:：，.!?。！？…।]+')
 SENTENCE_END = re.compile(r'[;；.!?。！？…।]+\s*')
+# Symbols the model would try to pronounce. A bracketed bare number such as "(43)" is
+# a merged verse label in the source text, so it is removed rather than read; words
+# inside brackets (e.g. "(சேலா)") are kept and only the brackets go.
+SPEECH_CLEANUP = re.compile(r'\(\s*' + D + r'+\s*\)|[()\[\]"“”‘’\']|(?<=\S)-(?=\S)')  # \w misses Tamil virama (்)
 TRAILING_SEMICOLON = re.compile(r'[;；]+(\s*)$')
 CLAUSE_END = re.compile(r'[,:：，]+\s*')
 # One model call per sentence keeps commas inline for natural prosody; sentences
@@ -100,6 +104,13 @@ def normalize_text(text, number_mode, input_format):
                 labels.append((a,b))
                 changes.append(dict(start=a,end=b,original=text[a:b],replacement='',reason='explicit verse label',verse_number=verse))
             offset += len(line)
+    for match in SPEECH_CLEANUP.finditer(text):
+        if not any(a <= match.start() < b for a,b in labels):
+            # Hyphens inside words become a space; everything else is dropped.
+            replacement = ' ' if match[0] == '-' else ''
+            labels.append((match.start(),match.end()))
+            changes.append(dict(start=match.start(),end=match.end(),original=match[0],
+                replacement=replacement,reason='speech cleanup: symbol or embedded verse number not read aloud'))
     if number_mode != 'Keep numbers unchanged':
         for match in TOKEN.finditer(text):
             if not any(a <= match.start() < b for a,b in labels):

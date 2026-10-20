@@ -17,6 +17,7 @@ Examples:
     .\\.venv\\Scripts\\python.exe batch_generate.py --list-books
 """
 import argparse
+import html
 import json
 import os
 import shutil
@@ -81,7 +82,8 @@ def parse_chapters(value, available):
 def chapter_text(db, number, name, chapter):
     verses = db.execute('select verseNum, word from words where bookNum=? and chNum=? order by verseNum',
                         (number, chapter)).fetchall()
-    return f'{name} {chapter}\n' + '\n'.join(f'{verse} {text.strip()}' for verse, text in verses), len(verses)
+    # The database contains HTML entities such as &quot; and &#39; in some verses.
+    return f'{name} {chapter}\n' + '\n'.join(f'{verse} {html.unescape(text).strip()}' for verse, text in verses), len(verses)
 
 def write_index(folder, number, name, identifier, quality):
     chapters = []
