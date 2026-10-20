@@ -24,7 +24,7 @@ QUALITY_PRESETS = {
     'Original — 32 steps, full precision': dict(steps=32, precision='fp32'),
 }
 DEFAULT_QUALITY = next(iter(QUALITY_PRESETS))
-BATCH_CHUNKS = 16  # chunks per worker request; the worker sub-batches by GPU memory
+BATCH_CHUNKS = 8  # chunks per worker request (= worker MAX_BATCH); smaller keeps progress updates frequent
 SEED = 1234
 
 def chunk_cache_key(chunk, options, reference_digest):
