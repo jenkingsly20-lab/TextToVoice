@@ -13,6 +13,7 @@ from engines.registry import Registry
 from services.audio import combine,write_wav,encode_mp3,inspect_mp3_timeline
 from services.chapter_plan import build_chapter_plan,verse_pcm_boundaries
 from services.performance import PerformanceLog
+from services.speech_normalization import chunk_pace
 from services.text_chunks import chunk_text
 
 registry = Registry()
@@ -37,10 +38,12 @@ def replace_with_retry(source, destination, attempts=20, delay=0.25):
                 raise
             time.sleep(delay)
 
-def chunk_cache_key(chunk, options, reference_digest):
+def chunk_cache_key(chunk, options, reference_digest, pace=1.0):
     identity = dict(text=chunk, reference=reference_digest, reference_text=options.get('reference_text', ''),
         steps=options.get('steps'), precision=options.get('precision'), seed=options.get('seed'),
         cfg_strength=options.get('cfg_strength'), voice=options.get('voice'))
+    if pace != 1.0:  # only slowed chunks carry it, so existing cache keys stay valid
+        identity['pace'] = pace
     return hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None):
@@ -49,7 +52,8 @@ def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None)
     batch = getattr(engine, 'synthesize_batch', None) or (lambda texts, o: [engine.synthesize(t, o) for t in texts])
     reference = options.get('reference_audio')
     digest = hashlib.sha256(Path(reference).read_bytes()).hexdigest() if reference else ''
-    keys = [chunk_cache_key(chunk, options, digest) for chunk in chunks]
+    paces = [chunk_pace(chunk) for chunk in chunks]
+    keys = [chunk_cache_key(chunk, options, digest, pace) for chunk, pace in zip(chunks, paces)]
     results, records, metrics = [None]*len(chunks), [None]*len(chunks), [None]*len(chunks)
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -70,14 +74,15 @@ def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None)
         if progress: progress(done/len(chunks), desc=f'Generating chunks {done+1}–{done+len(group)} of {len(chunks)}')
         if perf: perf.event('batch_started', chunk_indices=group)
         measured = time.perf_counter()
+        group_options = dict(options, paces=[paces[i] for i in group])
         try:
-            outputs = batch([chunks[i] for i in group], options)
+            outputs = batch([chunks[i] for i in group], group_options)
         except ValueError:
             raise
         except Exception as exc:
             # One retry; the engine restarts a dead or timed-out worker on the next call.
             if perf: perf.event('batch_retry', chunk_indices=group, error=str(exc))
-            outputs = batch([chunks[i] for i in group], options)
+            outputs = batch([chunks[i] for i in group], group_options)
         elapsed_ms = (time.perf_counter()-measured)*1000
         metric = dict(getattr(engine, 'last_metrics', {}))
         total = sum(len(out.pcm) for out in outputs) or 1

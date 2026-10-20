@@ -133,6 +133,7 @@ Run from `C:\John\TextToVoice` on the `perf-improvements` branch (or `main` once
 | `--chapters` | `3`, `1-5` or `1,4,7-9`. Default: all chapters. |
 | `--voice` | One voice for every book: `female` (default), `male`, or an installed voice id. |
 | `--voices` | Rotate voices by book position, e.g. `male,female`. The rotation is based on the book's position in `--books`, so resuming keeps the same assignment. Use the same `--books` value when resuming. |
+| `--voice-for` | Fix the voice for particular books, overriding the rotation, e.g. `psalms=male,proverbs=female`. |
 | `--quality` | One of the presets above. Default: Fast. |
 | `--out` | Output folder. Default: `outputs\batch`. |
 | `--force` | Regenerate chapters that already exist. **This overwrites them.** |
@@ -201,6 +202,8 @@ Text fixes made after scanning the whole database before the OT run:
 | Brackets and quotation marks, e.g. `(சேலா)` | ~80 verses, mostly Psalms | Symbols removed from speech; the words are still read |
 | Hyphenated names, e.g. `மகேர்-சாலால்-அஷ்-பாஸ்` | Isaiah 8 | Hyphen read as a short space |
 | Psalm heading crash for 91, 92 and 95–99 (`num2words` returns irregular single words, and misspells 98) | `services/bible_heading.py` | Correct ordinals spelled out explicitly, plus a fallback so no number can crash |
+
+**"சேலா" (Selah) is drawn out.** On its own after a full stop, it was spoken in 0.3 s. `SLOW_WORDS` in `services/speech_normalization.py` gives a standalone word extra time: `சேலா` gets 2.4×, about 0.7 s, chosen by listening to 1.8× and 2.4×. Add other words there if they need a slower, longer reading.
 
 All 1,189 chapters were dry-run through text planning, with no errors and no leftover symbols in the speech text.
 

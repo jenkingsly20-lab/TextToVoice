@@ -16,6 +16,14 @@ SENTENCE_END = re.compile(r'[;；.!?。！？…।]+\s*')
 # a merged verse label in the source text, so it is removed rather than read; words
 # inside brackets (e.g. "(சேலா)") are kept and only the brackets go.
 SPEECH_CLEANUP = re.compile(r'\(\s*' + D + r'+\s*\)|[()\[\]"“”‘’\']|(?<=\S)-(?=\S)')  # \w misses Tamil virama (்)
+# Words spoken as a chunk of their own that should be drawn out: the model gets this
+# many times its normal time for the chunk, so it speaks it more slowly.
+SLOW_WORDS = {'சேலா': 2.4}
+
+def chunk_pace(chunk):
+    """Duration multiplier for a chunk (1.0 = normal pace)."""
+    return SLOW_WORDS.get(re.sub(r'[\s,.;:!?…।]+', '', chunk), 1.0)
+
 TRAILING_SEMICOLON = re.compile(r'[;；]+(\s*)$')
 CLAUSE_END = re.compile(r'[,:：，]+\s*')
 # One model call per sentence keeps commas inline for natural prosody; sentences

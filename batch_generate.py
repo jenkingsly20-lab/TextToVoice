@@ -140,6 +140,7 @@ def main():
     parser.add_argument('--quality', default=DEFAULT_QUALITY, choices=list(QUALITY_PRESETS))
     parser.add_argument('--voice', default='default', help='Voice for every book: female, male or an installed voice id')
     parser.add_argument('--voices', help='Alternate voices book by book, e.g. male,female (Matthew male, Mark female, …)')
+    parser.add_argument('--voice-for', help='Fix the voice for particular books, e.g. psalms=male,proverbs=female')
     parser.add_argument('--force', action='store_true', help='Regenerate chapters that already exist')
     parser.add_argument('--retries', type=int, default=2, help='Extra immediate attempts for a failed chapter (default 2)')
     parser.add_argument('--allow-sleep', action='store_true', help='Let Windows sleep/turn off the screen during the run')
@@ -159,14 +160,20 @@ def main():
     out = Path(args.out)
     voices = [VOICE_ALIASES.get(v.strip(), v.strip()) for v in (args.voices or args.voice).split(',') if v.strip()]
     from services.default_voice import installed_voice_configs
-    unknown = [v for v in voices if v not in installed_voice_configs()]
+    overrides = {}
+    for item in (args.voice_for or '').split(','):
+        if item.strip():
+            book, _, chosen = item.partition('=')
+            for _, _, identifier in resolve_books(db, book.strip()):
+                overrides[identifier] = VOICE_ALIASES.get(chosen.strip(), chosen.strip())
+    unknown = [v for v in voices + list(overrides.values()) if v not in installed_voice_configs()]
     if unknown:
         sys.exit(f'Unknown voice(s) {unknown}. Use female, male or one of: {", ".join(installed_voice_configs())}')
     jobs, skipped = [], 0
     # Voices rotate by the book's position in --books, so a resumed run keeps the same assignment.
     for position, (number, name, identifier) in enumerate(resolve_books(db, args.books)):
-        voice = voices[position % len(voices)]
-        if len(voices) > 1:
+        voice = overrides.get(identifier, voices[position % len(voices)])
+        if len(voices) > 1 or overrides:
             print(f'{identifier:16s} {"male" if voice == VOICE_ALIASES["male"] else "female" if voice == "default" else voice}')
         available = [c for (c,) in db.execute('select distinct chNum from words where bookNum=? order by chNum', (number,))]
         for chapter in parse_chapters(args.chapters, available):

@@ -219,7 +219,10 @@ def main():
             ref = load_reference(request['reference_audio'])
             ref_frames = ref['ref_frames']
             ref_bytes = len(ref_text.encode('utf-8'))
-            durations = [ref_frames + int(ref_frames / ref_bytes * len(t.encode('utf-8'))) for t in texts]
+            # pace > 1 gives the model more time for that chunk, so it speaks more slowly.
+            paces = request.get('paces') or [1.0] * len(texts)
+            durations = [ref_frames + int(ref_frames / ref_bytes * len(t.encode('utf-8')) * pace)
+                         for t, pace in zip(texts, paces)]
             for t, duration in zip(texts, durations):
                 if duration * 256 / 24000 > MAX_SECONDS:
                     raise ValueError(f'Estimated chunk is longer than {MAX_SECONDS} seconds including the reference: '

@@ -106,7 +106,7 @@ class IndicF5Engine:
         self.process.stdin.write(json.dumps({'texts': list(texts), 'reference_audio': reference,
             'reference_text': transcript, 'outputs': outputs, 'steps': options.get('steps', 32),
             'precision': options.get('precision', 'fp32'), 'cfg_strength': options.get('cfg_strength', 2.0),
-            'seed': options.get('seed', 1234)}, ensure_ascii=True) + '\n')
+            'seed': options.get('seed', 1234), 'paces': options.get('paces')}, ensure_ascii=True) + '\n')
         self.process.stdin.flush()
         per_chunk = 120 if device == 'CPU' else 30
         result = self._read(timeout=(900 if device == 'CPU' else 300) + per_chunk*len(texts))
