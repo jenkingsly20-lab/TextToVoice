@@ -21,6 +21,13 @@ def build_chapter_plan(text, mode, pause_ms, punctuation_pauses, number_mode, in
     # A recognized reference + consistently numbered lines is a verified format;
     # arbitrary plain text without that heading is never stripped automatically.
     use_verses = input_format == 'Verse-numbered Bible text' or bool(heading and numbered)
+    # Without a heading, three or more lines numbered 1, 2, 3… (strictly increasing)
+    # are treated as verses so their labels are not read aloud.
+    auto_verses = False
+    if not use_verses and not heading and numbered and len(content_lines) >= 3:
+        numbers = [int(LABEL.match(line)['number']) for line in content_lines]
+        auto_verses = all(a < b for a,b in zip(numbers,numbers[1:])) and all(line[LABEL.match(line).end():].strip() for line in content_lines)
+        use_verses = auto_verses
     book_id = None
     if heading:
         base = BOOK_IDS[heading['book']]
@@ -75,6 +82,8 @@ def build_chapter_plan(text, mode, pause_ms, punctuation_pauses, number_mode, in
     combined.update(normalized_tts_text='\n'.join(combined['spoken_chunks']),
         book_id=book_id,chapter=heading['chapter'] if heading else None,stage_timings=timings,
         verse_layout_verified=True,heading=heading,trailing_pause_ms=pending)
+    if auto_verses:
+        combined['warnings'].append('Numbered verse lines detected automatically: verse numbers are not read aloud. If the numbers should be spoken, add a word before each number.')
     return combined
 
 def verse_pcm_boundaries(plan, boundaries, total_samples, rate):

@@ -5,7 +5,6 @@ import queue
 import subprocess
 import tempfile
 import threading
-import wave
 import time
 import numpy as np
 from config import ROOT
@@ -75,6 +74,10 @@ class IndicF5Engine:
             raise
 
     def synthesize(self, text, options):
+        return self.synthesize_batch([text], options)[0]
+
+    def synthesize_batch(self, texts, options):
+        """Synthesize several chunks in one worker request; the worker batches them on the GPU."""
         ref = options.get('reference_audio')
         transcript = options.get('reference_text', '')
         if not options.get('reference_consent'):
@@ -98,30 +101,24 @@ class IndicF5Engine:
             prepare_reference(ref, reference)
             self.reference_cache_key = cache_key
         reference_prepare_ms = (time.perf_counter()-measured)*1000
-        output = str(Path(self.temp.name) / 'chunk.wav')
+        outputs = [str(Path(self.temp.name) / f'chunk_{i}.npy') for i in range(len(texts))]
         measured = time.perf_counter()
-        self.process.stdin.write(json.dumps({'text': text, 'reference_audio': reference,
-            'reference_text': transcript, 'output': output}, ensure_ascii=True) + '\n')
+        self.process.stdin.write(json.dumps({'texts': list(texts), 'reference_audio': reference,
+            'reference_text': transcript, 'outputs': outputs, 'steps': options.get('steps', 32),
+            'precision': options.get('precision', 'fp32'), 'cfg_strength': options.get('cfg_strength', 2.0),
+            'seed': options.get('seed', 1234)}, ensure_ascii=True) + '\n')
         self.process.stdin.flush()
-        result = self._read(timeout=900 if device == 'CPU' else 300)
+        per_chunk = 120 if device == 'CPU' else 30
+        result = self._read(timeout=(900 if device == 'CPU' else 300) + per_chunk*len(texts))
         worker_roundtrip_ms = (time.perf_counter()-measured)*1000
-        # Float WAV is decoded with stdlib chunks via scipy-free NumPy parsing in UI env.
-        import struct
-        content = Path(output).read_bytes()
-        offset = 12
-        while offset + 8 <= len(content):
-            tag, size = content[offset:offset+4], struct.unpack_from('<I', content, offset+4)[0]
-            if tag == b'data':
-                pcm = np.frombuffer(content, dtype='<f4', count=size//4, offset=offset+8).copy()
-                break
-            offset += 8 + size + size % 2
-        else:
-            raise ValueError('Worker returned an invalid WAV.')
-        Path(output).unlink(missing_ok=True)
+        audio = []
+        for output in outputs:
+            audio.append(AudioResult(np.load(output), 24000, result['device'], MODEL_REVISION))
+            Path(output).unlink(missing_ok=True)
         result.update(adapter_model_load_ms=model_load_ms,reference_prepare_ms=reference_prepare_ms,
             reference_cache_hit=reference_cache_hit,worker_roundtrip_ms=worker_roundtrip_ms)
         self.last_metrics = result
-        return AudioResult(pcm, 24000, result['device'], MODEL_REVISION)
+        return audio
 
     def unload(self):
         if self.process:

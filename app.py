@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 import gradio as gr
 from engines.registry import RESEARCHED
-from services.generation import generate, registry
+from services.generation import generate, registry, generation_lock
+from services.chapter_generation import QUALITY_PRESETS, DEFAULT_QUALITY
 from services.gpu import diagnostics
 from services.ratings import save_rating, FIELDS
 from services.default_voice import default_voice_status, voice_choices, voice_sample
@@ -41,7 +42,7 @@ def read_upload(path):
         raise gr.Error('The file must use UTF-8 encoding.')
 
 def run_generation(text, engine, mode, pause, voice, ref=None, transcript='', consent=False, device='Auto', progress=gr.Progress(),
-                   semicolon_pause=True, number_mode='Tamil number words', input_format='Plain text'):
+                   semicolon_pause=False, number_mode='Tamil number words', input_format='Plain text', quality=DEFAULT_QUALITY):
     if engine == 'indicf5' and (ref or transcript or consent):
         missing = []
         if not ref:
@@ -55,7 +56,7 @@ def run_generation(text, engine, mode, pause, voice, ref=None, transcript='', co
     try:
         audio, mp3, meta, record = generate(text, engine, mode, pause, voice, progress,
             reference_audio=ref, reference_text=transcript, reference_consent=consent, device=device,
-            semicolon_pause=semicolon_pause, number_mode=number_mode, input_format=input_format)
+            semicolon_pause=semicolon_pause, number_mode=number_mode, input_format=input_format, quality=quality)
         status = 'TEST ONLY — NOT SPEECH. Tone validates audio plumbing; pronunciation remains untested.'
         if record['is_speech']:
             status = 'Completed — தமிழ் audio தயார். Play அழுத்திக் கேளுங்கள்; MP3 download செய்யலாம்.'
@@ -70,13 +71,23 @@ def run_generation(text, engine, mode, pause, voice, ref=None, transcript='', co
         return (*[gr.skip() for _ in range(6)], 'Error — Speech உருவாக்க முடியவில்லை:\n' + message)
 
 def run_selected_generation(text, engine, mode, pause, voice, custom, ref, transcript, consent, device,
-                            semicolon_pause=True, number_mode='Tamil number words', input_format='Plain text', progress=gr.Progress()):
+                            semicolon_pause=False, number_mode='Tamil number words', input_format='Plain text',
+                            quality=DEFAULT_QUALITY, progress=gr.Progress()):
     if not custom:
         ref, transcript, consent = None, '', False
     elif engine == 'indicf5' and not (ref or transcript or consent):
         return (*[gr.skip() for _ in range(6)], 'Advanced custom voice is selected. Provide its recording, exact transcript and permission, or turn off custom voice to use the default.')
     return run_generation(text, engine, mode, pause, voice, ref, transcript, consent, device, progress,
-                          semicolon_pause=semicolon_pause, number_mode=number_mode, input_format=input_format)
+                          semicolon_pause=semicolon_pause, number_mode=number_mode, input_format=input_format, quality=quality)
+
+def warm_up():
+    """Load IndicF5 in the background at launch so the first chapter skips the ~30 s model load."""
+    try:
+        if registry.engines['indicf5'].is_available():
+            with generation_lock:
+                registry.select('indicf5')
+    except Exception as exc:
+        print('IndicF5 warm-up failed; it will load on first use:', exc)
 
 def assess(a, b, preference, notes, *scores):
     try:
@@ -129,7 +140,9 @@ def build_ui():
                 with gr.Row():
                     mode = gr.Radio(['Whole text', 'Lines', 'Sentences'], value='Lines', label='Chunking')
                     pause = gr.Slider(250, 700, value=400, step=50, label='Pause between chunks (ms)')
-                semicolon = gr.Checkbox(value=True, label='நிறுத்தக்குறிகளுக்கு இடைவெளி: comma, semicolon, period மற்றும் பிற குறிகள்')
+                semicolon = gr.Checkbox(value=False, label='Also split at commas (slower, older behaviour; full stops always get a pause) / காற்புள்ளியிலும் பிரித்தல்')
+                quality = gr.Dropdown(list(QUALITY_PRESETS), value=DEFAULT_QUALITY, label='Speed / quality')
+                gr.Markdown('Fast is several times quicker. If it sounds worse than before, choose **Original** to compare.')
                 numbers = gr.Dropdown(NUMBER_MODES, value=NUMBER_MODES[0], label='Number reading / எண்களை வாசிக்கும் முறை')
                 gr.Markdown('Tamil number words என்பது default. Plain text-ல் தொடக்க எண்களும் வாசிக்கப்படும். Verse-numbered mode-ல் உறுதிசெய்யப்பட்ட வரித்தொடக்க வசன எண்கள் மட்டும் தவிர்க்கப்படும்; உரையிலுள்ள எண்கள் தமிழில் வாசிக்கப்படும்.')
                 spoken_preview = gr.Textbox(label='Model-க்கு அனுப்பப்படும் உரை — preview', interactive=False, lines=4)
@@ -139,7 +152,7 @@ def build_ui():
                 gr.Markdown('Default voice: AI4Bharat Rasa, Tamil female book narration, TAM_F_BOOK_00014. [Source](https://huggingface.co/datasets/ai4bharat/Rasa) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See assets/voices/default_tamil/ATTRIBUTION.md for credit and changes.')
             reset.click(reset_reference, outputs=[ref, transcript, consent, ref_status, status], queue=False, api_name=False)
             started = go.click(lambda: 'Generating — தமிழ் குரல் உருவாக்கப்படுகிறது…', outputs=status, queue=False, api_name=False)
-            event = started.then(run_selected_generation, [text, engine, mode, pause, voice, custom, ref, transcript, consent, device, semicolon, numbers, input_format],
+            event = started.then(run_selected_generation, [text, engine, mode, pause, voice, custom, ref, transcript, consent, device, semicolon, numbers, input_format, quality],
                              [player, mp3, wav, meta, details, a, status], concurrency_limit=1, api_name=False)
             cancel.click(fn=None, cancels=[event])
             gr.Markdown('Cancellation removes queued work; an active synchronous engine call may finish. Completed files remain local.')
@@ -172,5 +185,7 @@ def build_ui():
 
 if __name__ == '__main__':
     config.OUTPUTS.mkdir(parents=True, exist_ok=True)
+    import threading
+    threading.Thread(target=warm_up, daemon=True).start()
     build_ui().queue(default_concurrency_limit=1).launch(server_name='127.0.0.1', server_port=7860,
         share=False, inbrowser=True, show_error=True, allowed_paths=[str(config.OUTPUTS)])

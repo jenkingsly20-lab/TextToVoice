@@ -11,7 +11,58 @@ D = r'[0-9௦-௯]'
 LABEL = re.compile(r'^[ \t]*(?P<number>' + D + r'+)(?:[.)])?[ \t]+')
 TOKEN = re.compile(r'(?<!\w)[+-]?(?:' + D + r'{1,2}(?:,' + D + r'{2})+,' + D + r'{3}|' + D + r'{1,3}(?:,' + D + r'{3})+|' + D + r'+)(?:\.' + D + r'+)?(?!\w)')
 PUNCTUATION = re.compile(r'[;；,:：，.!?。！？…।]+')
+SENTENCE_END = re.compile(r'[;；.!?。！？…।]+\s*')
+TRAILING_SEMICOLON = re.compile(r'[;；]+(\s*)$')
+CLAUSE_END = re.compile(r'[,:：，]+\s*')
+# One model call per sentence keeps commas inline for natural prosody; sentences
+# longer than this are split further, so each call stays well under IndicF5's 30 s window.
+MAX_CHUNK_CHARS = 220
 PAUSES = {',':180,'，':180,':':250,'：':250,';':350,'；':350,'.':450,'。':450,'।':450,'?':500,'？':500,'!':450,'！':450,'…':600}
+
+def split_long(source, limit=MAX_CHUNK_CHARS):
+    """Split a verse/line at every sentence end, then split any sentence longer than limit.
+
+    The model does not pause reliably at full stops inside one call, so each sentence
+    is its own chunk followed by real silence. Commas stay inside the sentence for
+    natural phrasing; clause and word splits are used only for over-long sentences.
+    Returns (part, pause_ms_after) pairs; punctuation stays with its part."""
+    def pieces(text, pattern):
+        result, cursor = [], 0
+        for match in pattern.finditer(text):
+            result.append((text[cursor:match.end()], max(PAUSES[c] for c in match[0].strip())))
+            cursor = match.end()
+        if text[cursor:]:
+            result.append((text[cursor:], 0))
+        return result
+    def words(text):
+        return [(word, 120) for word in re.findall(r'\S+\s*', text)]
+    parts = []
+    for sentence, pause in pieces(source, SENTENCE_END):
+        if not sentence.strip():
+            if parts:
+                parts[-1] = (parts[-1][0] + sentence, parts[-1][1])
+            continue
+        if len(sentence.strip()) <= limit:
+            parts.append((sentence, pause))
+            continue
+        sub = []
+        for clause, clause_pause in pieces(sentence, CLAUSE_END):
+            sub.extend([(clause, clause_pause)] if len(clause.strip()) <= limit else words(clause))
+            sub[-1] = (sub[-1][0], max(sub[-1][1], clause_pause))
+        merged = []
+        for part, part_pause in sub:
+            if merged and len((merged[-1][0] + part).strip()) <= limit:
+                merged[-1] = (merged[-1][0] + part, part_pause)
+            else:
+                merged.append((part, part_pause))
+        merged[-1] = (merged[-1][0], pause)
+        parts.extend(merged)
+    if not parts:
+        return [(source, 0)]
+    parts[-1] = (parts[-1][0], 0)
+    # IndicF5 voices a chunk-final semicolon as an extra syllable; the silence after
+    # the chunk already marks it, so the model never sees it.
+    return [(TRAILING_SEMICOLON.sub(r'\1', part), pause) for part, pause in parts]
 
 def tamil_number(token, digits=False):
     value = ''.join(str(int(c)) if c.isdecimal() else c for c in token).replace(',', '')
@@ -117,10 +168,11 @@ def prepare_speech_plan(text, mode='Lines', pause_ms=400, punctuation_pauses=Tru
             events.append(dict(punctuation=match[0],pause_ms=duration,source_chunk=source,start=match.start(),end=match.end()))
             cursor = match.end()
         tail = source[cursor:]
-        if tail.strip():
-            if chunks: gaps.append(pending)
-            chunks.append(tail)
-            pending = 0
+        for part, pause in (split_long(tail) if not punctuation_pauses else [(tail, 0)]):
+            if part.strip():
+                if chunks: gaps.append(pending)
+                chunks.append(part)
+                pending = pause
         pending = max(pending,pause_ms)
     if not chunks: raise ValueError('No speakable text remains after selected speech settings.')
     timing['text_preprocessing_ms'] += (time.perf_counter()-measured)*1000
@@ -131,7 +183,7 @@ def prepare_speech_chunks(chunks, semicolon_pause=True, number_mode='Keep number
     plan = prepare_speech_plan(''.join(chunks),'Whole text',400,semicolon_pause,number_mode,input_format)
     return plan['spoken_chunks'],plan['changes']
 
-def preview_speech(text, punctuation_pauses=True, number_mode='Tamil number words', input_format='Plain text', mode='Lines', pause_ms=400):
+def preview_speech(text, punctuation_pauses=False, number_mode='Tamil number words', input_format='Plain text', mode='Lines', pause_ms=400):
     if not text or not text.strip(): return ''
     try:
         from services.chapter_plan import build_chapter_plan
