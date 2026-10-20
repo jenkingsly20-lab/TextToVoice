@@ -1,0 +1,240 @@
+# Speed improvements and batch Bible generation
+
+This document records what was changed on the `perf-improvements` branch, why each change was made, how it was verified, and how to use the batch generator for more books or other languages.
+
+## Results at a glance
+
+| | Before | After |
+|---|---|---|
+| John 14 (31 verses, ~5.3 min audio) | 783 s | ~106 s (incl. ~13 s model load) |
+| Time per verse | ~25 s | ~3 s |
+| Model calls for John 14 | 96 (one per comma/full stop) | 53 (one per sentence, batched 8 at a time) |
+| Real-time factor (generation time / audio length) | 2.0–2.5 | ~0.3 |
+| Whole New Testament (260 chapters, 7,957 verses) | ~55 h (estimate) | ~7–7.5 h (estimate) |
+
+Measured on an ASUS ProArt laptop, RTX 4060 Laptop GPU (8 GB), Fast preset.
+
+## What was slow
+
+The GPU was always used correctly, and the model was loaded only once. The cost came from how work was cut up and sent to the GPU:
+
+1. **Every comma, semicolon and full stop became a separate model call.** Each IndicF5 (F5-TTS) call re-processes the ~5 s reference voice clip at every one of its sampling steps, so tiny chunks (average 2.6 s of speech) spent about half their GPU time on the reference. A single-word chunk took 3.3 s.
+2. **Calls ran one at a time** (batch size 1), leaving the GPU under-used.
+3. **Full fp32 maths**, with TF32 disabled.
+4. **Classifier-free guidance ran two separate transformer passes per step.**
+5. **32 sampling steps.**
+
+## Changes
+
+### 1. Worker: batched, faster sampling (`engines/indicf5_worker.py`)
+
+- **Custom batched sampler.** This replaces `CFM.sample` with an equivalent Euler loop that samples up to `MAX_BATCH` (8) chunks together, padded and attention-masked.
+- **One forward pass for guidance.** The conditional and unconditional passes are stacked into one batch. The "dropped" inputs are built so they are identical to upstream `drop_text` / `drop_audio_cond`: text set to `-1`, which becomes filler token `0`, and the audio condition set to zeros.
+- **Per-row padding fix (important).** The text ConvNeXt and the convolutional position embedding in F5's DiT ignore the padding mask. In a batch, a short row's real audio was influenced by its padded tail, and short verses sounded different (spectral similarity 0.29). These two cheap layers now run per row at each row's true length. Batched output is identical to unbatched output (similarity 1.000).
+- **TF32 enabled; bf16 autocast for the transformer.** The vocoder stays in fp32.
+- **Configurable steps and precision** come from the request (see presets below).
+- **Fixed seed (1234)**, so a re-run produces the same audio and the resume cache stays consistent.
+- **Reference cache.** The reference clip is decoded, resampled and converted to a mel spectrogram once, not on every request.
+- **Memory safety.** Sub-batches are limited by a frame budget (`TAMIL_TTS_FRAME_BUDGET`, default 12000 rows×frames). On a CUDA out-of-memory error, the sub-batch is halved and retried automatically.
+- **New protocol.** The worker accepts `texts` and `outputs` lists and returns one `.npy` per chunk. The adapter in `engines/indicf5.py` exposes `synthesize_batch()`; `synthesize()` still works for single texts.
+
+### 2. Text: one chunk per sentence, with real pauses (`services/speech_normalization.py`)
+
+- **Every verse is split at sentence ends** (`.` `?` `!` `;` `…` `।`), and real silence is inserted: 450 ms after `.`, 350 ms after `;`, 500 ms after `?`, and 600 ms after `…`.
+  - *Tweak history:* first we sent one whole verse per call with punctuation kept. Listening showed the model does **not** pause reliably at full stops inside one call, so sentence splitting was added.
+- **Commas stay inside the sentence,** where the model phrases them naturally. The old behaviour (split at every comma too) is still available as the "Also split at commas" option in the app.
+- **Chunk-final semicolons are removed** from the text sent to the model, because IndicF5 voiced them as an extra syllable ("ஆகன"). The pause after them is kept, and the original text and the JSON audit trail are unchanged.
+- **Long sentences** (over `MAX_CHUNK_CHARS` = 220 characters) are split further, at clause punctuation and then at word boundaries. This keeps every call inside IndicF5's 30-second window, which includes the reference clip.
+
+### 3. Verse numbers (`services/chapter_plan.py`)
+
+Three or more lines numbered in increasing order, with no chapter heading, are now detected as verses automatically. The verse numbers are no longer read aloud, and a warning is recorded in the JSON.
+
+### 4. Orchestration: batches, resume cache, retry (`services/chapter_generation.py`)
+
+- **Batching.** Chunks are sorted by length, so padding is minimal, and sent 8 per worker request (`BATCH_CHUNKS`). Results are put back in verse order.
+- **Resume cache.** Each finished chunk is saved to `<output>/.cache/chunks/<sha256>.npz`. The key covers the text, voice, reference audio hash, transcript, steps, precision, seed and guidance strength. A failed or stopped chapter continues from its saved chunks. The cache is deleted once the chapter's MP3 and JSON are written.
+- **Retry.** A failed batch is retried once; a dead or timed-out worker restarts automatically.
+- **Speed/quality presets** (`QUALITY_PRESETS`):
+
+  | Preset | Steps | Precision | Notes |
+  |---|---|---|---|
+  | Fast — 16 steps, bf16 (default) | 16 | bf16 | Spectral similarity to Original: 0.994 |
+  | Balanced — 24 steps, bf16 | 24 | bf16 | |
+  | Original — 32 steps, full precision | 32 | fp32 | Same settings as before the change |
+
+### 5. App (`app.py`)
+
+- New **Speed / quality** dropdown in Advanced Settings.
+- **"Also split at commas"** checkbox (off by default).
+- **Model warm-up at launch.** IndicF5 loads in the background, so the first generation skips the ~15–30 s load.
+
+### 6. Install safety (`requirements-indicf5-lock.txt`)
+
+The CUDA package index line (`--extra-index-url https://download.pytorch.org/whl/cu126`) was added. Without it, reinstalling from the lock file silently installs CPU-only PyTorch.
+
+### 7. Batch generator (`batch_generate.py`)
+
+Generates whole books from the Tamil SQLite Bible database. See the next section.
+
+## How it was verified
+
+- **Equivalence with upstream F5-TTS** (fp32, 32 steps, same seed): waveform correlation 0.9994 for the longest item.
+- **Batched vs single-verse output:** log-mel correlation 1.000 after the padding fix. A different random seed gives 0.76, which shows the natural take-to-take variation.
+- **Fast preset vs Original:** 0.994.
+- **Listening tests by the user:** John 14 in the female voice, with sentence pauses and the semicolon fix; Exodus 1 in the male voice.
+- **Unit tests:** 30 pass. New tests cover sentence splitting, long-line splitting, verse auto-detection and the resume cache.
+  - Three tests (`test_end_to_end`, `test_default_assets_validate_and_preprocessing_is_cached`, `test_reference_consent_before_model_loading`) **were already failing on `main` before these changes**. They concern WAV/caching assumptions and are unrelated to speed.
+
+## Batch generation
+
+### Database
+
+The batch generator reads `.venv-indicf5/BibleDB/tamil.db` (read-only; it is never modified), in SQLite format:
+
+- `words(wordId, word, bookNum, chNum, verseNum)` holds one row per verse. `word` is the verse text, and `bookNum` runs 1–66.
+- `configuration.booknames` holds the 66 Tamil book names in canonical order. Each chapter's spoken heading is built from these (e.g. `யோவான் 1` is spoken as "யோவான், முதலாம் அதிகாரம்").
+
+The database is excluded from git (`.venv*/` is ignored). It is copyrighted by the Bible Society of India, so do not commit it.
+
+### Commands
+
+Run from `C:\John\TextToVoice` on the `perf-improvements` branch (or `main` once it is merged):
+
+```powershell
+# List all books with numbers and ids
+.\.venv\Scripts\python.exe batch_generate.py --list-books
+
+# New Testament, alternating voices book by book (Matthew male, Mark female, ...)
+.\.venv\Scripts\python.exe batch_generate.py --books nt --voices male,female
+
+# Old Testament
+.\.venv\Scripts\python.exe batch_generate.py --books ot --voices male,female
+
+# Specific books or chapters
+.\.venv\Scripts\python.exe batch_generate.py --books john,matthew
+.\.venv\Scripts\python.exe batch_generate.py --books genesis --chapters 1-10 --voice female
+```
+
+| Option | Meaning |
+|---|---|
+| `--books` | Comma-separated book ids (`john`), numbers (`43`) or Tamil names. Groups: `nt`, `ot`, `all`. |
+| `--chapters` | `3`, `1-5` or `1,4,7-9`. Default: all chapters. |
+| `--voice` | One voice for every book: `female` (default), `male`, or an installed voice id. |
+| `--voices` | Rotate voices by book position, e.g. `male,female`. The rotation is based on the book's position in `--books`, so resuming keeps the same assignment. Use the same `--books` value when resuming. |
+| `--quality` | One of the presets above. Default: Fast. |
+| `--out` | Output folder. Default: `outputs\batch`. |
+| `--force` | Regenerate chapters that already exist. **This overwrites them.** |
+
+### Stopping and resuming
+
+- **Ctrl+C once:** finishes the current chapter, then stops.
+- **Ctrl+C twice:** stops immediately and kills the GPU worker. Chunks already generated are kept.
+- **Run the same command again:** finished chapters are skipped, and a half-done chapter resumes from its cached chunks.
+- **A chapter counts as finished only when both its MP3 and JSON exist.** The JSON is written last, through a temporary file.
+- Existing chapters are never overwritten unless you pass `--force`.
+
+### Output (for Flutter)
+
+```
+outputs\batch\
+  matthew\
+    matthew_01.mp3
+    matthew_01.json      # verse timings + full provenance
+    ...
+    index.json           # every chapter: files, verse count, duration, voice
+  mark\ ...
+  .work\                 # temporary working files and resume cache; safe to delete when nothing is running
+```
+
+Key fields in each chapter JSON:
+
+- `book_id`, `chapter`, `audio_filename`, `total_duration_ms`.
+- `verses[]`: `verse_number`, `start_ms`, `end_ms`, `speech_end_ms`.
+  - The end is exclusive, and the pause after a verse belongs to that verse.
+  - `verse_timing.intro_end_ms` marks the end of the spoken chapter heading.
+- `original_text`, `spoken_chunks`, `pauses_ms`, `settings` (voice, quality, steps, precision, seed).
+
+MP3 players differ in how they handle encoder delay. Check that verse highlighting lines up in your Flutter player before relying on it (see `timing_note` in the JSON).
+
+### Time estimates (Fast preset, RTX 4060 Laptop GPU)
+
+About **3 seconds per verse**, plus about 30 s of model load per run.
+
+| Scope | Chapters | Verses | Estimate |
+|---|---|---|---|
+| One average chapter | — | ~30 | ~1.5–2 min |
+| John + Matthew | 49 | 1,950 | ~1 h 40 min |
+| New Testament | 260 | 7,957 | ~7–7.5 h |
+| Old Testament | 929 | 23,145 | ~20–22 h (run it over several nights; it resumes) |
+
+Tips for long runs on a laptop:
+
+- Keep it plugged in, and set sleep to "Never" while plugged in.
+- Use ProArt Creator Hub / MyASUS fan mode Standard or Performance, not Whisper.
+- Up to about 85 °C GPU temperature is normal. To monitor it:
+
+  ```powershell
+  nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used --format=csv -l 10
+  ```
+
+### Old Testament notes
+
+- Psalms headings are spoken as "முதலாம் சங்கீதம்" (with no "அதிகாரம்"). Psalm 119 (176 verses) is within the supported range.
+- Very long verses (e.g. Esther 8:9) are split automatically at sentence and clause boundaries.
+- Numbers inside verse text are read as Tamil number words.
+- Listen to one chapter from a few different books before committing to a whole-OT run, e.g. `--books genesis,psalms,esther --chapters 1`.
+
+## Voices
+
+Installed voices (folder `assets/voices/`):
+
+| Alias / id | Description | Speaking pace |
+|---|---|---|
+| `female` = `default` | Rasa Tamil female book narration | 14.4 chars/s (slowest) |
+| `male` = `rasa_tam_m_book_00072` | Rasa Tamil male narration | 15.5 chars/s (~7% faster) |
+| `rasa_tam_f_news_00621` | Female, news style | 15.3 chars/s |
+| `rasa_tam_f_conv_02748` | Female, conversational | 16.3 chars/s |
+
+IndicF5 copies the speaking pace of the voice's reference clip. Generation speed is the same for every voice.
+
+**To add a voice:** create `assets/voices/<id>/` containing:
+
+- `reference.wav`: 1–15 seconds of clean speech; 5–8 s works well.
+- `transcript.txt`: the **exact** words spoken in the clip. A wrong transcript makes every verse sound wrong.
+- `voice.json`: `id`, `display_name`, `audio`, `transcript_file`, `audio_sha256`, `transcript_sha256`, `license`, `license_url`, `source_url`, `attribution`, `permission_basis`.
+
+Only use voices you have permission to use. `install_voice_options.py` shows how the existing voices were installed.
+
+## Using other languages
+
+IndicF5 (`ai4bharat/IndicF5`) supports 11 Indian languages: Assamese, Bengali, Gujarati, Hindi, Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil and Telugu. The speed improvements (worker, batching, presets, cache) are language-independent. The **text preparation is Tamil-specific**, so another language needs the following:
+
+1. **A Bible database in that language** with the same SQLite schema (`words` table, and `configuration.booknames` in canonical order). Pass it with `--db`.
+2. **A reference voice in that language**, with its exact transcript (see "To add a voice").
+3. **Book names and headings.** `services/bible_heading.py` (`BOOKS`, `PREFIXED`, Tamil ordinals such as "முதலாம்", and the words "அதிகாரம்" and "சங்கீதம்") and `services/chapter_plan.py` (`BOOK_IDS`, Tamil name → English id) must be extended for the new language. Without a recognised heading, chapters are not named `<book>_<chapter>` and verse timing is not verified.
+4. **Number reading.** `tamil_number()` in `services/speech_normalization.py` calls `indic_numtowords.num2words(..., lang='ta')`, and the digit words are Tamil. Use that library's code for the new language, if it supports it, and translate the `DIGITS` words.
+5. **Punctuation.** Sentence and clause splitting already includes `।` (Devanagari danda) and common punctuation. Listen for any mark the model voices aloud, as it did with `;`, and add it to `TRAILING_SEMICOLON` if needed.
+6. **Listen to a test chapter first**, before running a whole book.
+
+For a language IndicF5 does not support, a different TTS engine is needed. Engines are pluggable through `engines/registry.py`, and the batch path only needs `synthesize()` or `synthesize_batch()`.
+
+## Tuning knobs
+
+| Setting | Where | Default | Effect |
+|---|---|---|---|
+| Speed/quality preset | `--quality`, app dropdown | Fast | Steps and precision |
+| `TAMIL_TTS_MAX_BATCH` | environment variable | 8 | Maximum chunks per GPU batch |
+| `TAMIL_TTS_FRAME_BUDGET` | environment variable | 12000 | GPU memory budget per sub-batch. Lower it if other apps use the GPU. |
+| `BATCH_CHUNKS` | `services/chapter_generation.py` | 8 | Chunks per worker request; also sets how often progress updates |
+| `MAX_CHUNK_CHARS` | `services/speech_normalization.py` | 220 | Longest sentence sent in one call |
+| `PAUSES` | `services/speech_normalization.py` | `.` 450 ms, `;` 350 ms, `?` 500 ms … | Silence after each sentence end |
+| Verse gap | app "Pause between chunks" / `pause_ms` | 400 ms | Silence between verses |
+| `SEED` | `services/chapter_generation.py` | 1234 | Change it for a different take. Changing it invalidates the resume cache. |
+
+## Ideas not yet done
+
+- **Longer pauses at commas in lists of names** (e.g. Exodus 1:2–4). This would add about 250 ms after commas only where a sentence lists several short items.
+- **A speaking-pace option** (`--pace`) to slow down a voice by giving the model more time per sentence.
+- **Shorter reference clips** (3–4 s). This would cut per-call cost further, but needs a new exact transcript for each trimmed clip.
+- **`torch.compile`** is not used: it needs Triton, which is not available on Windows.

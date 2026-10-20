@@ -4,6 +4,30 @@
 
 Local Windows Gradio app for comparing Tamil TTS pronunciation. **IndicF5 is installed and native Windows / CUDA generation has passed on the RTX 4060.** Human pronunciation review is still required. A second real speech engine is not installed.
 
+## Fast generation and whole-book batches
+
+Generation is about 7× faster than the first version: about **3 seconds per verse** and **about 2 minutes per chapter** on the RTX 4060 laptop GPU. Verses are read one sentence at a time, with real pauses at full stops and semicolons.
+
+To generate whole books from the Tamil Bible database (one MP3 + JSON with verse timings per chapter, plus an `index.json` per book), run:
+
+```powershell
+.\.venv\Scripts\python.exe batch_generate.py --list-books
+.\.venv\Scripts\python.exe batch_generate.py --books nt --voices male,female
+.\.venv\Scripts\python.exe batch_generate.py --books ot --voices male,female
+```
+
+- Output goes to `outputs\batch\<book>\`.
+- Press Ctrl+C once to stop after the current chapter, or twice to stop immediately. Run the same command again to resume; finished chapters are never overwritten.
+
+See **[Speed improvements and batch generation](docs/PERFORMANCE_AND_BATCH.md)** for:
+- all implementation details and fixes;
+- time estimates for the Old and New Testaments;
+- the voices and how to add one;
+- tuning settings;
+- what is needed to support other languages.
+
+## Using the app
+
 Start from PowerShell in this folder:
 
 ```powershell
