@@ -1,5 +1,6 @@
 from engines.mock import MockEngine
 from engines.indicf5 import IndicF5Engine
+from engines.kokoro import KokoroEngine
 
 RESEARCHED = '''### Engine availability
 * **Test tone — installed. TEST ONLY, NOT SPEECH.** No pronunciation evaluation is possible with a tone.
@@ -13,6 +14,7 @@ class Registry:
     def __init__(self):
         self.engines = {'mock': MockEngine()}
         self.engines['indicf5'] = IndicF5Engine()
+        self.engines['kokoro'] = KokoroEngine()
         self.current = None
     def choices(self):
         return [(e.display_name, e.id) for e in self.engines.values() if e.is_available()]

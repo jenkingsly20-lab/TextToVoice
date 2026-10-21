@@ -39,7 +39,54 @@ def ordinal(number):
         last = prefix+ORDINAL[unit]
     return ' '.join(words[:-2]+[last])
 
-def extract_heading(text):
+# English (WEB) book names in canonical order: (written name, spoken name, book id).
+# Ids match the Tamil BOOK_IDS so both languages share file names (john_03.mp3).
+ENGLISH_BOOKS = [(name, spoken or name, book_id) for name, spoken, book_id in [
+    ('Genesis','','genesis'),('Exodus','','exodus'),('Leviticus','','leviticus'),('Numbers','','numbers'),
+    ('Deuteronomy','','deuteronomy'),('Joshua','','joshua'),('Judges','','judges'),('Ruth','','ruth'),
+    ('1 Samuel','First Samuel','1samuel'),('2 Samuel','Second Samuel','2samuel'),('1 Kings','First Kings','1kings'),
+    ('2 Kings','Second Kings','2kings'),('1 Chronicles','First Chronicles','1chronicles'),
+    ('2 Chronicles','Second Chronicles','2chronicles'),('Ezra','','ezra'),('Nehemiah','','nehemiah'),
+    ('Esther','','esther'),('Job','','job'),('Psalms','','psalms'),('Proverbs','','proverbs'),
+    ('Ecclesiastes','','ecclesiastes'),('Song of Solomon','','songofsolomon'),('Isaiah','','isaiah'),
+    ('Jeremiah','','jeremiah'),('Lamentations','','lamentations'),('Ezekiel','','ezekiel'),('Daniel','','daniel'),
+    ('Hosea','','hosea'),('Joel','','joel'),('Amos','','amos'),('Obadiah','','obadiah'),('Jonah','','jonah'),
+    ('Micah','','micah'),('Nahum','','nahum'),('Habakkuk','','habakkuk'),('Zephaniah','','zephaniah'),
+    ('Haggai','','haggai'),('Zechariah','','zechariah'),('Malachi','','malachi'),('Matthew','','matthew'),
+    ('Mark','','mark'),('Luke','','luke'),('John','','john'),('Acts','','acts'),('Romans','','romans'),
+    ('1 Corinthians','First Corinthians','1corinthians'),('2 Corinthians','Second Corinthians','2corinthians'),
+    ('Galatians','','galatians'),('Ephesians','','ephesians'),('Philippians','','philippians'),
+    ('Colossians','','colossians'),('1 Thessalonians','First Thessalonians','1thessalonians'),
+    ('2 Thessalonians','Second Thessalonians','2thessalonians'),('1 Timothy','First Timothy','1timothy'),
+    ('2 Timothy','Second Timothy','2timothy'),('Titus','','titus'),('Philemon','','philemon'),
+    ('Hebrews','','hebrews'),('James','','james'),('1 Peter','First Peter','1peter'),('2 Peter','Second Peter','2peter'),
+    ('1 John','First John','1john'),('2 John','Second John','2john'),('3 John','Third John','3john'),
+    ('Jude','','jude'),('Revelation','','revelation')]]
+ENGLISH_REFERENCE = re.compile(r'(?P<book>(?:[1-3] )?[A-Za-z][A-Za-z ]*?)\s+(?P<chapter>\d+)\.?')
+
+def extract_english_heading(text):
+    """'John 3' on the first nonempty line -> spoken 'John, chapter 3.' ('Psalm 23.')."""
+    offset = 0
+    names = {name: (spoken, book_id) for name, spoken, book_id in ENGLISH_BOOKS}
+    for line in text.splitlines(keepends=True):
+        candidate = line.rstrip('\r\n')
+        if not candidate.strip('﻿ \t'):
+            offset += len(line)
+            continue
+        match = ENGLISH_REFERENCE.fullmatch(candidate.strip('﻿ \t'))
+        if not match or ' '.join(match['book'].split()) not in names or not 1 <= int(match['chapter']) <= 150:
+            return None
+        spoken_book, book_id = names[' '.join(match['book'].split())]
+        chapter = int(match['chapter'])
+        spoken = f'Psalm {chapter}.' if book_id == 'psalms' else f'{spoken_book}, chapter {chapter}.'
+        return dict(book=spoken_book, book_id=book_id, book_prefix=None, chapter=chapter, verse=None, verse_end=None,
+                    start=offset, end=offset+len(candidate), body_start=offset+len(line),
+                    original=candidate, spoken=spoken)
+    return None
+
+def extract_heading(text, language='ta'):
+    if language == 'en':
+        return extract_english_heading(text)
     offset = 0
     for line in text.splitlines(keepends=True):
         candidate = line.rstrip('\r\n')

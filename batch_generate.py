@@ -32,12 +32,34 @@ from pathlib import Path
 import config
 from services.chapter_generation import generate, registry, replace_with_retry, QUALITY_PRESETS, DEFAULT_QUALITY
 from services.chapter_plan import BOOK_IDS
+from services.bible_heading import ENGLISH_BOOKS
 
 DEFAULT_DB = config.ROOT / '.venv-indicf5' / 'BibleDB' / 'tamil.db'
 DEFAULT_OUT = config.OUTPUTS / 'batch'
 SECONDS_PER_VERSE_GUESS = 3.0
 VOICE_ALIASES = {'female': 'default', 'male': 'rasa_tam_m_book_00072'}
 GROUPS = {'nt': range(40, 67), 'ot': range(1, 40), 'all': range(1, 67)}
+# English (Kokoro-82M) voices with the reading style chosen by listening to Genesis 1 samples:
+# Michael reads each verse as one passage; Heart reads sentence by sentence with pauses.
+ENGLISH_VOICES = {'male': dict(voice='am_michael', sentence_pauses=False, label='Michael (US male)'),
+                  'female': dict(voice='af_heart', sentence_pauses=True, label='Heart (US female)')}
+ENGLISH_SPEED = 0.9
+ENGLISH_DB = config.ROOT / '.venv-indicf5' / 'BibleDB' / 'web.sqlite'
+ENGLISH_OUT = config.OUTPUTS / 'batch_en'
+
+def is_english(db):
+    """web.sqlite layout: verses(book, chapter, verse, text); tamil.db: words(bookNum, chNum, verseNum, word)."""
+    return db.execute("select 1 from sqlite_master where type='table' and name='verses'").fetchone() is not None
+
+def chapters_of(db, number):
+    sql = ('select distinct chapter from verses where book=? order by chapter' if is_english(db)
+           else 'select distinct chNum from words where bookNum=? order by chNum')
+    return [c for (c,) in db.execute(sql, (number,))]
+
+def verses_of(db, number, chapter):
+    sql = ('select verse, text from verses where book=? and chapter=? order by verse' if is_english(db)
+           else 'select verseNum, word from words where bookNum=? and chNum=? order by verseNum')
+    return db.execute(sql, (number, chapter)).fetchall()
 
 def open_db(path):
     if not Path(path).is_file():
@@ -45,10 +67,15 @@ def open_db(path):
     return sqlite3.connect(f'file:{Path(path).as_posix()}?mode=ro', uri=True)
 
 def book_names(db):
+    if is_english(db):
+        return [name for name, _, _ in ENGLISH_BOOKS]
     raw = db.execute('select booknames from configuration').fetchone()[0]
     return [name.strip().strip("'") for name in raw.split(',')]
 
 def book_id(name):
+    english = {written: identifier for written, _, identifier in ENGLISH_BOOKS}
+    if name in english:
+        return english[name]
     prefix, _, base = name.partition(' ') if name[:1].isdigit() else ('', '', name)
     return prefix + BOOK_IDS[base]
 
@@ -80,8 +107,8 @@ def parse_chapters(value, available):
     return [c for c in available if c in chosen]
 
 def chapter_text(db, number, name, chapter):
-    verses = db.execute('select verseNum, word from words where bookNum=? and chNum=? order by verseNum',
-                        (number, chapter)).fetchall()
+    # WEB leaves some verses empty (e.g. Luke 17:36, Acts 8:37: footnoted in modern texts); they have nothing to read.
+    verses = [(verse, text) for verse, text in verses_of(db, number, chapter) if text.strip()]
     # The database contains HTML entities such as &quot; and &#39; in some verses.
     return f'{name} {chapter}\n' + '\n'.join(f'{verse} {html.unescape(text).strip()}' for verse, text in verses), len(verses)
 
@@ -136,8 +163,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--books', help='Comma-separated: john,matthew or 43,40 or Tamil names; nt / ot / all')
     parser.add_argument('--chapters', help='Only these chapters, e.g. 3, 1-5 or 1,4,7-9 (default: all)')
-    parser.add_argument('--db', default=str(DEFAULT_DB), help='Path to tamil.db')
-    parser.add_argument('--out', default=str(DEFAULT_OUT), help='Output folder (a sub-folder per book)')
+    parser.add_argument('--language', choices=['ta', 'en'], default='ta',
+                        help='ta = Tamil (IndicF5, tamil.db, outputs/batch); en = English (Kokoro, web.sqlite, outputs/batch_en)')
+    parser.add_argument('--db', help='Bible database (default: tamil.db or web.sqlite by language)')
+    parser.add_argument('--out', help='Output folder, a sub-folder per book (default: outputs/batch or outputs/batch_en)')
     parser.add_argument('--quality', default=DEFAULT_QUALITY, choices=list(QUALITY_PRESETS))
     parser.add_argument('--voice', default='default', help='Voice for every book: female, male or an installed voice id')
     parser.add_argument('--voices', help='Alternate voices book by book, e.g. male,female (Matthew male, Mark female, …)')
@@ -148,10 +177,16 @@ def main():
     parser.add_argument('--list-books', action='store_true')
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')  # Tamil names on the Windows console
+    english = args.language == 'en'
+    args.db = args.db or str(ENGLISH_DB if english else DEFAULT_DB)
+    args.out = args.out or str(ENGLISH_OUT if english else DEFAULT_OUT)
     db = open_db(args.db)
+    if is_english(db) != english:
+        sys.exit(f'{args.db} does not match --language {args.language} (expected a '
+                 + ('verses' if english else 'words') + ' table).')
     if args.list_books:
         for i, name in enumerate(book_names(db), 1):
-            count = db.execute('select count(distinct chNum) from words where bookNum=?', (i,)).fetchone()[0]
+            count = len(chapters_of(db, i))
             print(f'{i:2d}  {book_id(name):16s} {name}  ({count} chapters)')
         return
     if not args.books:
@@ -159,24 +194,30 @@ def main():
 
     # Plan every chapter up front so progress and time left cover the whole run.
     out = Path(args.out)
-    voices = [VOICE_ALIASES.get(v.strip(), v.strip()) for v in (args.voices or args.voice).split(',') if v.strip()]
+    aliases = {key: key for key in ENGLISH_VOICES} if english else VOICE_ALIASES
+    voices = [aliases.get(v.strip(), v.strip()) for v in (args.voices or args.voice).split(',') if v.strip()]
     from services.default_voice import installed_voice_configs
+    valid = list(ENGLISH_VOICES) if english else list(installed_voice_configs())
     overrides = {}
     for item in (args.voice_for or '').split(','):
         if item.strip():
             book, _, chosen = item.partition('=')
             for _, _, identifier in resolve_books(db, book.strip()):
-                overrides[identifier] = VOICE_ALIASES.get(chosen.strip(), chosen.strip())
-    unknown = [v for v in voices + list(overrides.values()) if v not in installed_voice_configs()]
+                overrides[identifier] = aliases.get(chosen.strip(), chosen.strip())
+    unknown = [v for v in voices + list(overrides.values()) if v not in valid]
     if unknown:
-        sys.exit(f'Unknown voice(s) {unknown}. Use female, male or one of: {", ".join(installed_voice_configs())}')
+        sys.exit(f'Unknown voice(s) {unknown}. Use female, male or one of: {", ".join(valid)}')
+    def voice_label(voice):
+        if english:
+            return ENGLISH_VOICES[voice]['label']
+        return 'male' if voice == VOICE_ALIASES['male'] else 'female' if voice == 'default' else voice
     jobs, skipped = [], 0
     # Voices rotate by the book's position in --books, so a resumed run keeps the same assignment.
     for position, (number, name, identifier) in enumerate(resolve_books(db, args.books)):
         voice = overrides.get(identifier, voices[position % len(voices)])
         if len(voices) > 1 or overrides:
-            print(f'{identifier:16s} {"male" if voice == VOICE_ALIASES["male"] else "female" if voice == "default" else voice}')
-        available = [c for (c,) in db.execute('select distinct chNum from words where bookNum=? order by chNum', (number,))]
+            print(f'{identifier:16s} {voice_label(voice)}')
+        available = chapters_of(db, number)
         for chapter in parse_chapters(args.chapters, available):
             stem = f'{identifier}_{chapter:02d}'
             folder = out / identifier
@@ -184,11 +225,12 @@ def main():
             if finished and not args.force:
                 skipped += 1
                 continue
-            verses = db.execute('select count(*) from words where bookNum=? and chNum=?', (number, chapter)).fetchone()[0]
+            verses = len(verses_of(db, number, chapter))
             jobs.append(dict(number=number, name=name, identifier=identifier, chapter=chapter, stem=stem,
                              folder=folder, verses=verses, voice=voice))
     total = len(jobs) + skipped
-    print(f'{total} chapter(s) selected: {skipped} already done, {len(jobs)} to generate  [{args.quality}]')
+    engine_label = f'English, Kokoro, speed {ENGLISH_SPEED}' if english else args.quality
+    print(f'{total} chapter(s) selected: {skipped} already done, {len(jobs)} to generate  [{engine_label}]')
     print(f'Output: {out.resolve()}')
     if not jobs:
         print('Nothing to do.')
@@ -239,8 +281,15 @@ def main():
                 state['fraction'] = fraction
             def work():
                 try:
-                    state['result'] = generate(text, 'indicf5', voice=job['voice'], output_root=out / '.work',
-                        quality=args.quality, input_format='Verse-numbered Bible text', progress=progress)
+                    if english:
+                        chosen = ENGLISH_VOICES[job['voice']]
+                        state['result'] = generate(text, 'kokoro', voice=chosen['voice'], output_root=out / '.work',
+                            input_format='Verse-numbered Bible text', number_mode='Keep numbers unchanged',
+                            language='en', sentence_pauses=chosen['sentence_pauses'], speed=ENGLISH_SPEED,
+                            progress=progress)
+                    else:
+                        state['result'] = generate(text, 'indicf5', voice=job['voice'], output_root=out / '.work',
+                            quality=args.quality, input_format='Verse-numbered Bible text', progress=progress)
                 except Exception as exc:
                     state['error'] = exc
             measured = time.perf_counter()
@@ -284,7 +333,7 @@ def main():
             shutil.copyfile(produced, mp3)
             replace_with_retry(temporary, manifest)  # JSON last: a chapter counts as done only when both files exist
             shutil.rmtree(Path(produced).parent, ignore_errors=True)
-            write_index(job['folder'], job['number'], job['name'], job['identifier'], args.quality)
+            write_index(job['folder'], job['number'], job['name'], job['identifier'], engine_label)
             done += 1
             verses_done += job['verses']
             seconds_generating += elapsed

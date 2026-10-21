@@ -44,6 +44,9 @@ def chunk_cache_key(chunk, options, reference_digest, pace=1.0):
         cfg_strength=options.get('cfg_strength'), voice=options.get('voice'))
     if pace != 1.0:  # only slowed chunks carry it, so existing cache keys stay valid
         identity['pace'] = pace
+    for key in ('language', 'engine_id', 'speed'):  # set for non-Tamil runs only
+        if key in options:
+            identity[key] = options[key]
     return hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None):
@@ -101,7 +104,7 @@ def synthesize_all(engine, chunks, options, cache_dir, progress=None, perf=None)
 def generate(text, engine_id='mock', mode='Lines', pause_ms=400, voice=None, progress=None, output_root=None,
              reference_audio=None, reference_text='', reference_consent=False, device='Auto',
              semicolon_pause=False, number_mode='Tamil number words', input_format='Plain text', mp3_bitrate_kbps=None,
-             quality=DEFAULT_QUALITY):
+             quality=DEFAULT_QUALITY, language='ta', sentence_pauses=True, speed=None):
     started = time.perf_counter()
     root = Path(output_root or OUTPUTS)
     generation_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')+'_'+uuid.uuid4().hex
@@ -118,7 +121,8 @@ def generate(text, engine_id='mock', mode='Lines', pause_ms=400, voice=None, pro
         original_chunks = chunk_text(text,mode)
         perf.record('original_text_chunking_ms',measured)
         measured = time.perf_counter()
-        plan = build_chapter_plan(text,mode,pause_ms,semicolon_pause,number_mode,input_format)
+        plan = build_chapter_plan(text,mode,pause_ms,semicolon_pause,number_mode,input_format,
+                                  language=language,sentence_pauses=sentence_pauses)
         perf.record('planning_wall_ms',measured)
         perf.stages.update(plan['stage_timings'])
         perf.stages['text_chunking_ms'] += perf.stages['original_text_chunking_ms']
@@ -148,6 +152,8 @@ def generate(text, engine_id='mock', mode='Lines', pause_ms=400, voice=None, pro
             punctuation_pauses=semicolon_pause,number_mode=number_mode,input_format=input_format,
             verified_verse_numbered_input=plan['verse_layout_verified'],mp3_bitrate_kbps=bitrate,
             quality=quality,cfg_strength=2.0,seed=SEED,**QUALITY_PRESETS[quality])
+        if language != 'ta':
+            options.update(language=language,sentence_pauses=sentence_pauses,engine_id=engine_id,speed=speed or 1.0)
         if provenance: options['voice_provenance']=provenance
         measured = time.perf_counter()
         with generation_lock:

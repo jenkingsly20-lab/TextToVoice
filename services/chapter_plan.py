@@ -8,9 +8,10 @@ BOOK_IDS = dict(zip(
     'genesis|exodus|leviticus|numbers|deuteronomy|joshua|judges|ruth|samuel|kings|kings|chronicles|ezra|nehemiah|esther|job|psalms|psalms|proverbs|ecclesiastes|songofsolomon|isaiah|jeremiah|lamentations|lamentations|ezekiel|daniel|hosea|joel|amos|obadiah|jonah|micah|nahum|habakkuk|zephaniah|haggai|zechariah|malachi|matthew|mark|luke|john|acts|acts|romans|corinthians|galatians|ephesians|philippians|colossians|thessalonians|timothy|titus|philemon|hebrews|james|peter|jude|revelation|revelation'.split('|')))
 NUMBERED_ONLY = {'samuel','kings','chronicles','corinthians','thessalonians','timothy','peter'}
 
-def build_chapter_plan(text, mode, pause_ms, punctuation_pauses, number_mode, input_format):
+def build_chapter_plan(text, mode, pause_ms, punctuation_pauses, number_mode, input_format,
+                       language='ta', sentence_pauses=True):
     started = time.perf_counter()
-    heading = extract_heading(text)
+    heading = extract_heading(text, language)
     body_start = heading['body_start'] if heading else 0
     body = text[body_start:]
     lines = body.splitlines(keepends=True)
@@ -29,16 +30,20 @@ def build_chapter_plan(text, mode, pause_ms, punctuation_pauses, number_mode, in
         auto_verses = all(a < b for a,b in zip(numbers,numbers[1:])) and all(line[LABEL.match(line).end():].strip() for line in content_lines)
         use_verses = auto_verses
     book_id = None
-    if heading:
+    if heading and heading.get('book_id'):
+        book_id = heading['book_id']
+    elif heading:
         base = BOOK_IDS[heading['book']]
         prefix = heading['book_prefix']
         book_id = str(prefix)+base if prefix else (None if base in NUMBERED_ONLY else base)
     parse_ms = (time.perf_counter()-started)*1000
     timings = {'reference_parsing_ms':parse_ms,'text_preprocessing_ms':0.0,'text_chunking_ms':0.0}
     settings = dict(mode=mode,pause_ms=pause_ms,punctuation_pauses=punctuation_pauses,
-                    number_mode=number_mode,_allow_heading=False,_timings=timings)
+                    number_mode=number_mode,_allow_heading=False,_timings=timings,
+                    language=language,sentence_pauses=sentence_pauses)
     if not use_verses or not content_lines:
-        plan = prepare_speech_plan(text,mode,pause_ms,punctuation_pauses,number_mode,input_format,_timings=timings)
+        plan = prepare_speech_plan(text,mode,pause_ms,punctuation_pauses,number_mode,input_format,_timings=timings,
+                                   language=language,sentence_pauses=sentence_pauses)
         plan.update(chunk_verse_numbers=[None]*len(plan['spoken_chunks']),verse_sources=[],
             book_id=book_id,chapter=heading['chapter'] if heading else None,stage_timings=timings,
             verse_layout_verified=False,heading=heading)

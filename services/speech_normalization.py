@@ -11,11 +11,17 @@ D = r'[0-9௦-௯]'
 LABEL = re.compile(r'^[ \t]*(?P<number>' + D + r'+)(?:[.)])?[ \t]+')
 TOKEN = re.compile(r'(?<!\w)[+-]?(?:' + D + r'{1,2}(?:,' + D + r'{2})+,' + D + r'{3}|' + D + r'{1,3}(?:,' + D + r'{3})+|' + D + r'+)(?:\.' + D + r'+)?(?!\w)')
 PUNCTUATION = re.compile(r'[;；,:：，.!?。！？…।]+')
-SENTENCE_END = re.compile(r'[;；.!?。！？…।]+\s*')
+# Closing quotes/brackets after the mark stay with the sentence they end (English: ...?"').
+SENTENCE_END = re.compile(r'[;；.!?。！？…।]+[\'"’”)\]]*\s*')
 # Symbols the model would try to pronounce. A bracketed bare number such as "(43)" is
 # a merged verse label in the source text, so it is removed rather than read; words
 # inside brackets (e.g. "(சேலா)") are kept and only the brackets go.
 SPEECH_CLEANUP = re.compile(r'\(\s*' + D + r'+\s*\)|[()\[\]"“”‘’\']|(?<=\S)-(?=\S)')  # \w misses Tamil virama (்)
+# English keeps quotes, apostrophes (God's, don't) and hyphens; only merged verse
+# numbers and brackets are removed.
+EN_SPEECH_CLEANUP = re.compile(r'[(]\s*' + D + r'+\s*[)]|[()\[\]]')
+# Kokoro handles longer inputs than IndicF5, so whole English verses up to this length stay one call.
+EN_MAX_CHUNK_CHARS = 350
 # Words spoken as a chunk of their own that should be drawn out: the model gets this
 # many times its normal time for the chunk, so it speaks it more slowly.
 SLOW_WORDS = {'சேலா': 2.4}
@@ -31,17 +37,21 @@ CLAUSE_END = re.compile(r'[,:：，]+\s*')
 MAX_CHUNK_CHARS = 220
 PAUSES = {',':180,'，':180,':':250,'：':250,';':350,'；':350,'.':450,'。':450,'।':450,'?':500,'？':500,'!':450,'！':450,'…':600}
 
-def split_long(source, limit=MAX_CHUNK_CHARS):
+def split_long(source, limit=MAX_CHUNK_CHARS, sentences=True):
     """Split a verse/line at every sentence end, then split any sentence longer than limit.
 
     The model does not pause reliably at full stops inside one call, so each sentence
     is its own chunk followed by real silence. Commas stay inside the sentence for
     natural phrasing; clause and word splits are used only for over-long sentences.
-    Returns (part, pause_ms_after) pairs; punctuation stays with its part."""
+    Returns (part, pause_ms_after) pairs; punctuation stays with its part.
+    sentences=False keeps the whole source as one chunk when it fits within limit,
+    so the model chooses its own pauses (the English "whole verse" style)."""
+    if not sentences and len(source.strip()) <= limit:
+        return [(source, 0)]
     def pieces(text, pattern):
         result, cursor = [], 0
         for match in pattern.finditer(text):
-            result.append((text[cursor:match.end()], max(PAUSES[c] for c in match[0].strip())))
+            result.append((text[cursor:match.end()], max(PAUSES.get(c, 0) for c in match[0].strip())))
             cursor = match.end()
         if text[cursor:]:
             result.append((text[cursor:], 0))
@@ -94,7 +104,7 @@ def tamil_number(token, digits=False):
         words += ' புள்ளி ' + ' '.join(DIGITS[int(c)] for c in fraction)
     return sign + words
 
-def normalize_text(text, number_mode, input_format):
+def normalize_text(text, number_mode, input_format, language='ta'):
     if number_mode not in NUMBER_MODES or input_format not in INPUT_FORMATS:
         raise ValueError('Unknown number reading mode or Bible input format.')
     changes, labels, last, offset = [], [], 0, 0
@@ -112,7 +122,7 @@ def normalize_text(text, number_mode, input_format):
                 labels.append((a,b))
                 changes.append(dict(start=a,end=b,original=text[a:b],replacement='',reason='explicit verse label',verse_number=verse))
             offset += len(line)
-    for match in SPEECH_CLEANUP.finditer(text):
+    for match in (EN_SPEECH_CLEANUP if language == 'en' else SPEECH_CLEANUP).finditer(text):
         if not any(a <= match.start() < b for a,b in labels):
             # Hyphens inside words become a space; everything else is dropped.
             replacement = ' ' if match[0] == '-' else ''
@@ -137,20 +147,23 @@ def normalize_text(text, number_mode, input_format):
     return normalized, changes, warnings
 
 def prepare_speech_plan(text, mode='Lines', pause_ms=400, punctuation_pauses=True,
-                        number_mode='Tamil number words', input_format='Plain text', _allow_heading=True, _timings=None):
+                        number_mode='Tamil number words', input_format='Plain text', _allow_heading=True, _timings=None,
+                        language='ta', sentence_pauses=True):
     timing = _timings if _timings is not None else {'text_preprocessing_ms':0.0,'text_chunking_ms':0.0}
     measured = time.perf_counter()
     chunk_text(text, mode)
     timing['text_chunking_ms'] += (time.perf_counter()-measured)*1000
     if _allow_heading:
         from services.bible_heading import extract_heading
-        heading = extract_heading(text)
+        heading = extract_heading(text, language)
         if heading:
             head = prepare_speech_plan(heading['spoken'],mode,pause_ms,punctuation_pauses,
-                'Keep numbers unchanged','Plain text',_allow_heading=False,_timings=timing)
+                'Keep numbers unchanged','Plain text',_allow_heading=False,_timings=timing,
+                language=language,sentence_pauses=sentence_pauses)
             body_text = text[heading['body_start']:]
             body = prepare_speech_plan(body_text,mode,pause_ms,punctuation_pauses,
-                number_mode,input_format,_allow_heading=False,_timings=timing) if body_text.strip() else None
+                number_mode,input_format,_allow_heading=False,_timings=timing,
+                language=language,sentence_pauses=sentence_pauses) if body_text.strip() else None
             head['changes'] = [dict(start=heading['start'],end=heading['end'],
                 original=heading['original'],replacement=heading['spoken'],reason='Bible reference heading')]
             if body:
@@ -166,7 +179,7 @@ def prepare_speech_plan(text, mode='Lines', pause_ms=400, punctuation_pauses=Tru
             head['trailing_pause_ms'] = body['trailing_pause_ms'] if body else head['trailing_pause_ms']
             return head
     measured = time.perf_counter()
-    normalized, changes, warnings = normalize_text(text, number_mode, input_format)
+    normalized, changes, warnings = normalize_text(text, number_mode, input_format, language)
     timing['text_preprocessing_ms'] += (time.perf_counter()-measured)*1000
     measured = time.perf_counter()
     source_chunks = chunk_text(normalized, mode)
@@ -187,8 +200,13 @@ def prepare_speech_plan(text, mode='Lines', pause_ms=400, punctuation_pauses=Tru
             events.append(dict(punctuation=match[0],pause_ms=duration,source_chunk=source,start=match.start(),end=match.end()))
             cursor = match.end()
         tail = source[cursor:]
-        for part, pause in (split_long(tail) if not punctuation_pauses else [(tail, 0)]):
-            if part.strip():
+        limit = EN_MAX_CHUNK_CHARS if language == 'en' else MAX_CHUNK_CHARS
+        for part, pause in (split_long(tail, limit, sentence_pauses) if not punctuation_pauses else [(tail, 0)]):
+            if part.strip() and chunks and not any(c.isalnum() for c in part):
+                # Punctuation only (e.g. a stray closing quote): nothing to say, keep it with the previous chunk.
+                chunks[-1] += part
+                pending = max(pending, pause)
+            elif part.strip():
                 if chunks: gaps.append(pending)
                 chunks.append(part)
                 pending = pause
