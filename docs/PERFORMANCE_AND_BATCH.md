@@ -233,6 +233,31 @@ IndicF5 copies the speaking pace of the voice's reference clip. Generation speed
 
 Only use voices you have permission to use. `install_voice_options.py` shows how the existing voices were installed.
 
+## English (Kokoro-82M, World English Bible)
+
+| Part | Detail |
+|---|---|
+| Engine | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), Apache-2.0, run through `kokoro-onnx` on the CPU in its own environment, `.venv-english` (`engines/kokoro.py`, `engines/kokoro_worker.py`) |
+| Model files | `model_cache/kokoro/kokoro-v1.0.onnx` (325 MB) and `voices-v1.0.bin` (28 MB), from the kokoro-onnx GitHub releases |
+| Text | `.venv-indicf5/BibleDB/web.sqlite`: World English Bible, public domain. Table `verses(book, chapter, verse, text)`. |
+| Voices (chosen by listening) | **male** = `am_michael`, each verse read as one passage (the model chooses its own pauses). **female** = `af_heart`, read sentence by sentence with a 450 ms pause at each full stop. Both at speed 0.9. |
+| Output | `outputs\batch_en\<book>\<book>_<chapter>.mp3 / .json`, with the same file names and JSON layout as Tamil |
+| Speed | About 3.4× real time on the CPU, roughly 2 s per verse |
+
+```powershell
+.\.venv\Scripts\python.exe batch_generate.py --language en --books matthew,john --voices male,female
+.\.venv\Scripts\python.exe batch_generate.py --language en --books nt --voices male,female
+```
+
+How English differs from Tamil:
+
+- **Headings** are spoken as "Matthew, chapter 1." (or "Psalm 23."), and numbered books as "First Corinthians".
+- **Cleanup keeps** apostrophes ("God's", "didn't"), quotation marks and hyphens. Only merged verse numbers and brackets are removed.
+- **Numbers** are left to Kokoro, which reads digits in English.
+- **Closing quotation marks** stay with the sentence they end (`…?"'`). Pieces with no letters are merged into the previous piece. Without this, nested quotes in John 1 produced an empty piece.
+- **Empty verses:** WEB leaves 5 verses empty (Luke 17:36, Acts 8:37, 15:34, 24:7, Romans 16:25). They are skipped, so those verse numbers have no timing entry.
+- **Verse numbering** matches the Tamil Bible everywhere except Romans 14:24–26 and 16:25–27, where the closing doxology sits in a different place.
+
 ## Using other languages
 
 IndicF5 (`ai4bharat/IndicF5`) supports 11 Indian languages: Assamese, Bengali, Gujarati, Hindi, Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil and Telugu. The speed improvements (worker, batching, presets, cache) are language-independent. The **text preparation is Tamil-specific**, so another language needs the following:
