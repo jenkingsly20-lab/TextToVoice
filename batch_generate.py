@@ -87,7 +87,8 @@ def chapter_text(db, number, name, chapter):
 
 def write_index(folder, number, name, identifier, quality):
     chapters = []
-    for manifest in sorted(folder.glob(f'{identifier}_*.json')):
+    # Numeric order: a plain name sort puts psalms_100 before psalms_11.
+    for manifest in sorted(folder.glob(f'{identifier}_*.json'), key=lambda p: int(p.stem.rsplit('_', 1)[1])):
         data = json.loads(manifest.read_text(encoding='utf-8'))
         chapters.append(dict(chapter=data['chapter'], audio_filename=data['audio_filename'],
             metadata_filename=manifest.name, verse_count=len(data['verses']), voice=data['settings'].get('voice'),
