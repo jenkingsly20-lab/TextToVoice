@@ -15,7 +15,7 @@ MODEL_VERSION = 'kokoro-v1.0.onnx'
 
 class KokoroEngine:
     id = 'kokoro'
-    display_name = 'Kokoro-82M — English (local)'
+    display_name = 'Kokoro-82M — English (local, GPU when available)'
     capabilities = Capabilities()
 
     def __init__(self):
@@ -24,8 +24,14 @@ class KokoroEngine:
         self.log = None
         self.last_metrics = {}
 
+    @staticmethod
+    def python():
+        # The GPU environment (onnxruntime-gpu) is preferred when installed; the CPU one is the fallback.
+        gpu = ROOT / '.venv-english-gpu/Scripts/python.exe'
+        return gpu if gpu.exists() else ROOT / '.venv-english/Scripts/python.exe'
+
     def is_available(self):
-        return all(p.exists() for p in [ROOT / '.venv-english/Scripts/python.exe',
+        return all(p.exists() for p in [self.python(),
             ROOT / 'model_cache/kokoro/kokoro-v1.0.onnx', ROOT / 'model_cache/kokoro/voices-v1.0.bin'])
 
     def _read(self, timeout=300):
@@ -51,7 +57,7 @@ class KokoroEngine:
         self.temp = tempfile.TemporaryDirectory(prefix='kokoro_')
         self.responses = queue.Queue()
         env = dict(os.environ, PYTHONIOENCODING='utf-8')
-        self.process = subprocess.Popen([str(ROOT / '.venv-english/Scripts/python.exe'), '-u',
+        self.process = subprocess.Popen([str(self.python()), '-u',
             str(ROOT / 'engines/kokoro_worker.py')], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=self.log, text=True, encoding='utf-8', env=env,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -84,7 +90,7 @@ class KokoroEngine:
         result['worker_roundtrip_ms'] = (time.perf_counter() - measured) * 1000
         audio = []
         for output in outputs:
-            audio.append(AudioResult(np.load(output), 24000, 'cpu', MODEL_VERSION))
+            audio.append(AudioResult(np.load(output), 24000, result['device'], MODEL_VERSION))
             Path(output).unlink(missing_ok=True)
         self.last_metrics = result
         return audio

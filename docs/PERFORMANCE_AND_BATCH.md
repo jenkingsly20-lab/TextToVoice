@@ -242,7 +242,7 @@ Only use voices you have permission to use. `install_voice_options.py` shows how
 | Text | `.venv-indicf5/BibleDB/web.sqlite`: World English Bible, public domain. Table `verses(book, chapter, verse, text)`. |
 | Voices (chosen by listening) | **male** = `am_michael`, each verse read as one passage (the model chooses its own pauses). **female** = `af_heart`, read sentence by sentence with a 450 ms pause at each full stop. Both at speed 0.9. |
 | Output | `outputs\batch_en\<book>\<book>_<chapter>.mp3 / .json`, with the same file names and JSON layout as Tamil |
-| Speed | About 3.4× real time on the CPU, roughly 2 s per verse |
+| Speed | **GPU:** about 8–13× real time with `onnxruntime-gpu` in `.venv-english-gpu`, which reuses the CUDA 12 / cuDNN 9 DLLs from the Tamil environment's PyTorch. It is used automatically when that environment exists. TF32 is off, so the output matches the CPU. **CPU:** about 3.4× real time at best; the worker opts out of Windows power throttling. |
 
 ```powershell
 .\.venv\Scripts\python.exe batch_generate.py --language en --books matthew,john --voices male,female

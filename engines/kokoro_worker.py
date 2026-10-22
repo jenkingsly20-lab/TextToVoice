@@ -13,6 +13,7 @@ sys.stdout = sys.stderr
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = ROOT / 'model_cache' / 'kokoro' / 'kokoro-v1.0.onnx'
 VOICES = ROOT / 'model_cache' / 'kokoro' / 'voices-v1.0.bin'
+TORCH_LIB = ROOT / '.venv-indicf5' / 'Lib' / 'site-packages' / 'torch' / 'lib'
 
 def respond(data):
     protocol_out.write(json.dumps(data, ensure_ascii=True) + '\n')
@@ -37,13 +38,31 @@ def disable_power_throttling():
     kernel32.SetProcessInformation(process, 4, ctypes.byref(state), ctypes.sizeof(state))  # ProcessPowerThrottling
     kernel32.SetPriorityClass(process, 0x8000)  # ABOVE_NORMAL_PRIORITY_CLASS
 
+def load_kokoro():
+    """GPU when onnxruntime-gpu is installed (.venv-english-gpu), using the CUDA 12 / cuDNN 9
+    DLLs that ship with the Tamil environment's PyTorch; otherwise CPU."""
+    import onnxruntime as ort
+    from kokoro_onnx import Kokoro
+    if 'CUDAExecutionProvider' in ort.get_available_providers() and TORCH_LIB.is_dir():
+        import os
+        os.add_dll_directory(str(TORCH_LIB))
+        ort.preload_dlls(cuda=True, cudnn=True, msvc=True, directory=str(TORCH_LIB))
+        options = ort.SessionOptions()
+        options.log_severity_level = 3  # hide harmless memcpy/scatter warnings
+        # Full fp32 (no TF32) with cuDNN algorithm search: matches CPU output (spectral corr 1.000
+        # on a test sentence) at the same speed as the TF32 default.
+        cuda = ('CUDAExecutionProvider', {'use_tf32': '0', 'cudnn_conv_algo_search': 'DEFAULT'})
+        session = ort.InferenceSession(str(MODEL), sess_options=options, providers=[cuda, 'CPUExecutionProvider'])
+        if session.get_providers()[0] == 'CUDAExecutionProvider':
+            return Kokoro.from_session(session, str(VOICES)), 'cuda'
+    return Kokoro(str(MODEL), str(VOICES)), 'cpu'
+
 def main():
     disable_power_throttling()
     import numpy as np
-    from kokoro_onnx import Kokoro
-    kokoro = Kokoro(str(MODEL), str(VOICES))
+    kokoro, device = load_kokoro()
     available = set(kokoro.get_voices())
-    respond({'ready': True, 'device': 'cpu'})
+    respond({'ready': True, 'device': device})
     for line in sys.stdin:
         try:
             request = json.loads(line)
@@ -64,7 +83,7 @@ def main():
                     raise ValueError(f'Unexpected Kokoro sample rate {rate}.')
                 np.save(output, pcm.astype(np.float32))
                 durations.append(len(pcm) / rate)
-            respond({'ok': True, 'device': 'cpu', 'sample_rate': 24000, 'voice': voice, 'speed': speed,
+            respond({'ok': True, 'device': device, 'sample_rate': 24000, 'voice': voice, 'speed': speed,
                      'batch_size': len(texts), 'synthesis_wall_ms': (time.perf_counter() - started) * 1000,
                      'duration_seconds': durations})
         except Exception as exc:
