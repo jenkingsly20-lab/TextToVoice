@@ -2,6 +2,30 @@
 
 This document records what was changed on the `perf-improvements` branch, why each change was made, how it was verified, and how to use the batch generator for more books or other languages.
 
+## Project status (completed 2026-10-22)
+
+The whole Bible has been generated in Tamil and English. All four sets were checked against their databases with `tools/verify_batch.py`, with 0 problems.
+
+| Set | Engine and voices | Chapters | Spoken verses | Audio | Generation time | Folder |
+|---|---|---|---|---|---|---|
+| Tamil NT | IndicF5 (GPU); alternating male/female by book, starting with Matthew male | 260 | 7,957 | 21.4 h | 6.8 h | `outputs\batch\` |
+| Tamil OT | IndicF5 (GPU); Genesis male, Psalms male, then alternating | 929 | 23,145 | 67.1 h | 19.5 h | `outputs\batch\` |
+| English NT | Kokoro (CPU, then GPU); Michael/Heart alternating, starting with Matthew Michael | 260 | 7,953 (+5 empty placeholders) | 17.8 h | ~15 h* | `outputs\batch_en\` |
+| English OT | Kokoro (GPU); Genesis Michael, Psalms Michael, then alternating | 929 | 23,145 | 58.5 h | ~6 h | `outputs\batch_en\` |
+
+\* The English NT started on a throttled CPU while two runs overlapped (see "Lessons learned"). On the GPU it would take about 2 hours.
+
+Exact commands that produced the sets (use the same ones to resume or re-verify):
+
+```powershell
+.\.venv\Scripts\python.exe batch_generate.py --books nt --voices male,female
+.\.venv\Scripts\python.exe batch_generate.py --books genesis,psalms,ot --voices male,female --voice-for psalms=male
+.\.venv\Scripts\python.exe batch_generate.py --language en --books nt --voices male,female
+.\.venv\Scripts\python.exe batch_generate.py --language en --books genesis,psalms,ot --voices male,female --voice-for psalms=male
+```
+
+Hand the 66 book folders of `outputs\batch\` (Tamil) and `outputs\batch_en\` (English) to the app. Leave out `.work\`, `failed_chapters.log` and `.batch.lock`, which are generator working files. App-side notes for the Flutter agent are in `handoff\`.
+
 ## Results at a glance
 
 | | Before | After |
@@ -237,7 +261,7 @@ Only use voices you have permission to use. `install_voice_options.py` shows how
 
 | Part | Detail |
 |---|---|
-| Engine | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), Apache-2.0, run through `kokoro-onnx` on the CPU in its own environment, `.venv-english` (`engines/kokoro.py`, `engines/kokoro_worker.py`) |
+| Engine | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), Apache-2.0, run through `kokoro-onnx` in its own environment: `.venv-english-gpu` (GPU, preferred) or `.venv-english` (CPU fallback). Code: `engines/kokoro.py`, `engines/kokoro_worker.py`. |
 | Model files | `model_cache/kokoro/kokoro-v1.0.onnx` (325 MB) and `voices-v1.0.bin` (28 MB), from the kokoro-onnx GitHub releases |
 | Text | `.venv-indicf5/BibleDB/web.sqlite`: World English Bible, public domain. Table `verses(book, chapter, verse, text)`. |
 | Voices (chosen by listening) | **male** = `am_michael`, each verse read as one passage (the model chooses its own pauses). **female** = `af_heart`, read sentence by sentence with a 450 ms pause at each full stop. Both at speed 0.9. |
@@ -259,18 +283,116 @@ How English differs from Tamil:
 - **Highlighting detail:** Heart's books have sentence-level pieces (`chunk_sample_boundaries`), like Tamil. Michael's books are verse-level only, by choice, because each verse is read as one passage.
 - **Verse numbering** matches the Tamil Bible everywhere except Romans 14:24–26 and 16:25–27, where the closing doxology sits in a different place.
 
-## Using other languages
+## Verifying a run
 
-IndicF5 (`ai4bharat/IndicF5`) supports 11 Indian languages: Assamese, Bengali, Gujarati, Hindi, Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil and Telugu. The speed improvements (worker, batching, presets, cache) are language-independent. The **text preparation is Tamil-specific**, so another language needs the following:
+`tools/verify_batch.py` checks finished output against the Bible database, read-only. It checks:
 
-1. **A Bible database in that language** with the same SQLite schema (`words` table, and `configuration.booknames` in canonical order). Pass it with `--db`.
-2. **A reference voice in that language**, with its exact transcript (see "To add a voice").
-3. **Book names and headings.** `services/bible_heading.py` (`BOOKS`, `PREFIXED`, Tamil ordinals such as "முதலாம்", and the words "அதிகாரம்" and "சங்கீதம்") and `services/chapter_plan.py` (`BOOK_IDS`, Tamil name → English id) must be extended for the new language. Without a recognised heading, chapters are not named `<book>_<chapter>` and verse timing is not verified.
-4. **Number reading.** `tamil_number()` in `services/speech_normalization.py` calls `indic_numtowords.num2words(..., lang='ta')`, and the digit words are Tamil. Use that library's code for the new language, if it supports it, and translate the `DIGITS` words.
-5. **Punctuation.** Sentence and clause splitting already includes `।` (Devanagari danda) and common punctuation. Listen for any mark the model voices aloud, as it did with `;`, and add it to `TRAILING_SEMICOLON` if needed.
-6. **Listen to a test chapter first**, before running a whole book.
+- every chapter has its MP3 and JSON;
+- verse numbers exactly match the database, including `omitted_in_source` placeholders;
+- verse timings are contiguous, with none suspiciously short;
+- the MP3 timeline was verified;
+- book/chapter metadata, `index.json` completeness and order;
+- one voice per book, matching the rotation you ran with.
 
-For a language IndicF5 does not support, a different TTS engine is needed. Engines are pluggable through `engines/registry.py`, and the batch path only needs `synthesize()` or `synthesize_batch()`.
+Pass the same `--language`, `--books`, `--voices` and `--voice-for` as the batch run:
+
+```powershell
+.\.venv\Scripts\python.exe tools\verify_batch.py --books nt --voices male,female
+.\.venv\Scripts\python.exe tools\verify_batch.py --language en --books genesis,psalms,ot --voices male,female --voice-for psalms=male
+# add --mp3 to also decode every MP3 and re-check its timeline (slow)
+```
+
+It prints a summary and every problem, and exits with code 1 if anything is wrong. Run it after every batch and after any manual change to output files.
+
+## Adding another language (runbook)
+
+English was added this way. Use it as the worked example: each step below names the code that English needed.
+
+### 1. Get the text
+
+- **Choose a translation you may publish audio for.** Public domain or explicitly licensed. Check the database's own copyright fields (WEB: `meta.copyright_statement` = "Public Domain").
+- **Put the file in `.venv-indicf5\BibleDB\`** (git-ignored, so Bible text is never pushed).
+- **Use or map to one of the two supported SQLite layouts:**
+  - Tamil: `words(bookNum, chNum, verseNum, word)` + `configuration.booknames`;
+  - English: `verses(book, chapter, verse, text)`.
+
+  `is_english()`, `chapters_of()` and `verses_of()` in `batch_generate.py` pick the layout. A new layout needs a branch there.
+
+### 2. Scan the text before generating
+
+Read-only checks, written as small scripts:
+
+- **Verse numbering vs the Tamil database.** Compare `(book, chapter, verse)` sets. English differs only in Romans 14/16.
+- **Empty verses.** WEB had 5. They are skipped and listed as `omitted_in_source` placeholders (`add_omitted_verses`).
+- **Every non-letter character.** Look for HTML entities (`&quot;`), footnote markers, digits, brackets and merged verse numbers like `(43)`. The Tamil scan found all of these.
+- **The longest verses**, and words that need special pacing (e.g. "சேலா").
+
+### 3. Choose an engine and voices
+
+- **Indian languages supported by IndicF5** (Assamese, Bengali, Gujarati, Hindi, Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil, Telugu): reuse `indicf5` and add a reference voice (see "Voices").
+- **Other languages:** check whether Kokoro has voices for the language (it covers several, e.g. Spanish, French, Hindi, Italian, Portuguese, Japanese and Chinese). Otherwise add an engine with `synthesize_batch()` (see `engines/kokoro.py` and `engines/kokoro_worker.py`) and register it in `engines/registry.py`.
+- **Check licenses.** Kokoro is Apache-2.0. F5-TTS English and XTTS-v2 are non-commercial only, so they were rejected.
+- **Make listening samples first.** One short passage in several voices and styles (speed, whole verse vs sentence pauses), then let the listener choose. For English, see `outputs\english_voice_test\`; the chosen samples went into `chosen\`.
+
+### 4. Code touchpoints
+
+| What | Where | English example |
+|---|---|---|
+| Spoken chapter heading | `services/bible_heading.py` | `ENGLISH_BOOKS`, `extract_english_heading()` → "John, chapter 3.", "Psalm 23." |
+| Text cleanup | `services/speech_normalization.py` | `EN_SPEECH_CLEANUP` keeps apostrophes and quotes; Tamil removes them |
+| Longest chunk | same | `EN_MAX_CHUNK_CHARS` = 350 (Kokoro handles more than IndicF5's 220) |
+| Numbers | same | English: `'Keep numbers unchanged'` (the engine reads digits); Tamil: `tamil_number()` |
+| Reading style | `sentence_pauses` in `prepare_speech_plan()` / `generate()` | Heart: sentence pauses; Michael: whole verse |
+| Language plumbing | `language=` in `build_chapter_plan()` and `generate()` | `'ta'` (default) or `'en'` |
+| Batch options | `batch_generate.py` | `--language en`, `ENGLISH_VOICES`, `ENGLISH_DB`, `ENGLISH_OUT` |
+
+Add the new language as another `language` value along the same path, so Tamil behaviour stays untouched. Run the test suite after each change: 32 pass, and 3 old failures from `main` are unrelated.
+
+### 5. Dry-run every chapter
+
+Before any audio, build the chapter plan for **every chapter in both reading styles**, and assert:
+
+- the verse count matches;
+- `book_id` is set;
+- every chunk contains letters.
+
+This caught the Psalm 91–99 heading crash (Tamil) and the nested-quote empty chunk (English, John 1).
+
+### 6. Smoke test, then run
+
+- **Smoke test:** generate 1–2 chapters into a scratch `--out` folder, check them with `tools/verify_batch.py --out <folder>`, and listen.
+- **Full run:** run the batch **in your own terminal**. Use exactly the same command to resume. Never start a second run on the same output folder; the lock now refuses it.
+
+### 7. Verify and hand off
+
+- **Verify:** run `tools/verify_batch.py` with the run's arguments.
+- **Hand off:** give the app team the book folders, plus a note on anything new (see `handoff\` for the format: changed files, checksums, JSON fields).
+
+## Lessons learned
+
+| What happened | Cause | Rule now |
+|---|---|---|
+| 9.5 h with no progress overnight | The laptop entered Modern Standby; "sleep = never" doesn't prevent it | The batch keeps Windows awake. Keep the lid open, or set lid close to "Do nothing". |
+| English chapters took 10–20 min instead of ~1 | Two batch runs on the same folder ran the same chapters and fought for the CPU | One run per output folder, enforced by `.batch.lock` |
+| CPU speed dropped ~3× when the terminal was in the background | Windows power throttling of window-less processes (EcoQoS), plus the Balanced power mode | The Kokoro worker opts out of throttling and runs at above-normal priority. Use "Best performance" power mode. |
+| Some IndicF5 chapters were slow; VRAM at 7.9/8 GB | The Windows driver silently spills into shared memory instead of failing | The worker caps VRAM at 80% (out-of-memory halves the batch) |
+| Matthew 8/15 rejected | The MP3 was 0.3 ms longer than the PCM (encoder end padding) | Up to one MPEG frame of extra tail is accepted |
+| `Access is denied` on rename | The antivirus or indexer briefly locked a new file | Renames retry; failed chapters retry 2× plus a final pass |
+| The model voiced "ஆகன" at semicolons | IndicF5 pronounces a chunk-final `;` | Chunk-final semicolons are dropped (the pause stays) |
+| No pause at full stops | IndicF5 doesn't pause reliably inside one call | One call per sentence, with real silence after it |
+| Batched short verses sounded different | F5's text and position convolutions ignore padding | Those layers run per row; batched output is identical to unbatched |
+| Kokoro on the CPU was the bottleneck while the GPU sat idle | No GPU build of onnxruntime | `.venv-english-gpu` (onnxruntime-gpu, reusing PyTorch's CUDA DLLs): ~10× real time |
+
+## Environments and model files (not in git)
+
+| Folder | Purpose | How it was created |
+|---|---|---|
+| `.venv` | UI, batch, tools (Python 3.10) | `requirements.txt` |
+| `.venv-indicf5` | IndicF5 Tamil worker (PyTorch 2.6 + CUDA 12.6) | `docs/WINDOWS_SETUP.md`, `requirements-indicf5-lock.txt` |
+| `.venv-english` | Kokoro CPU worker (fallback) | `py -3.10 -m venv .venv-english`, then `pip install kokoro-onnx soundfile` |
+| `.venv-english-gpu` | Kokoro GPU worker (preferred when present) | Same packages, but `onnxruntime-gpu==1.23.2` instead of `onnxruntime` (installed with `--no-deps`) |
+| `model_cache/` | IndicF5 and Vocos weights, `kokoro/kokoro-v1.0.onnx`, `kokoro/voices-v1.0.bin` | `download_indicf5.py`; Kokoro files from github.com/thewh1teagle/kokoro-onnx releases (`model-files-v1.0`) |
+| `.venv-indicf5/BibleDB/` | `tamil.db`, `web.sqlite` | Provided by the project owner |
 
 ## Tuning knobs
 
@@ -288,6 +410,9 @@ For a language IndicF5 does not support, a different TTS engine is needed. Engin
 ## Ideas not yet done
 
 - **Longer pauses at commas in lists of names** (e.g. Exodus 1:2–4). This would add about 250 ms after commas only where a sentence lists several short items.
+- **Clause or word timings for Michael's English books.** Declined for now: verse-level highlighting was kept to preserve the whole-verse reading style. If wanted later, forced alignment (torchaudio MMS_FA, ~1.2 GB) could add word timings to the JSON without changing the audio, for Tamil too.
+- **Smaller MP3s.** The app side converts to 48 kbps for delivery. Re-check verse alignment after any re-encode.
+- **A slower English "Selah".** The Tamil "சேலா" is drawn out 2.4×; the English one is read normally inside the verse.
 - **A speaking-pace option** (`--pace`) to slow down a voice by giving the model more time per sentence.
 - **Shorter reference clips** (3–4 s). This would cut per-call cost further, but needs a new exact transcript for each trimmed clip.
 - **`torch.compile`** is not used: it needs Triton, which is not available on Windows.

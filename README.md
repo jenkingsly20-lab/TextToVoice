@@ -4,27 +4,41 @@
 
 Local Windows Gradio app for comparing Tamil TTS pronunciation. **IndicF5 is installed and native Windows / CUDA generation has passed on the RTX 4060.** Human pronunciation review is still required. A second real speech engine is not installed.
 
+## Status: the whole Bible in Tamil and English (completed 2026-10-22)
+
+| Set | Chapters | Audio | Folder |
+|---|---|---|---|
+| Tamil (IndicF5, GPU) | 1,189 | 88.5 h | `outputs\batch\<book>\` |
+| English, World English Bible (Kokoro-82M, GPU) | 1,189 | 76.3 h | `outputs\batch_en\<book>\` |
+
+Each chapter is an MP3 plus a JSON file with verse timings, and each book has an `index.json`. Every set was checked against its database with `tools\verify_batch.py`.
+
 ## Fast generation and whole-book batches
 
-Generation is about 7× faster than the first version: about **3 seconds per verse** and **about 2 minutes per chapter** on the RTX 4060 laptop GPU. Verses are read one sentence at a time, with real pauses at full stops and semicolons.
-
-To generate whole books from the Tamil Bible database (one MP3 + JSON with verse timings per chapter, plus an `index.json` per book), run:
+Tamil generation is about 7× faster than the first version: about **3 seconds per verse**, or **about 2 minutes per chapter**, on the RTX 4060 laptop GPU. English (Kokoro on the GPU) runs at about 10× real time. Verses are read one sentence at a time, with real pauses at full stops and semicolons. Male English verses are read whole.
 
 ```powershell
 .\.venv\Scripts\python.exe batch_generate.py --list-books
+# Tamil
 .\.venv\Scripts\python.exe batch_generate.py --books nt --voices male,female
-.\.venv\Scripts\python.exe batch_generate.py --books ot --voices male,female
+.\.venv\Scripts\python.exe batch_generate.py --books genesis,psalms,ot --voices male,female --voice-for psalms=male
+# English (WEB)
+.\.venv\Scripts\python.exe batch_generate.py --language en --books nt --voices male,female
+# Check a finished run (same arguments as the run)
+.\.venv\Scripts\python.exe tools\verify_batch.py --language en --books nt --voices male,female
 ```
 
-- Output goes to `outputs\batch\<book>\`.
-- Press Ctrl+C once to stop after the current chapter, or twice to stop immediately. Run the same command again to resume; finished chapters are never overwritten.
+- Press **Ctrl+C once** to stop after the current chapter, or **twice** to stop immediately. Run the same command again to resume; finished chapters are never overwritten.
+- Only one run per output folder is allowed. The batch keeps Windows awake while it runs.
 
 See **[Speed improvements and batch generation](docs/PERFORMANCE_AND_BATCH.md)** for:
-- all implementation details and fixes;
-- time estimates for the Old and New Testaments;
-- the voices and how to add one;
-- tuning settings;
-- what is needed to support other languages.
+- the project status and the exact commands used;
+- all implementation details and fixes, and the lessons learned;
+- voices and how to add one;
+- **the step-by-step runbook for adding another language**;
+- verification, environments and tuning settings.
+
+Notes for the app (Flutter) team are in [`handoff/`](handoff/).
 
 ## Using the app
 
