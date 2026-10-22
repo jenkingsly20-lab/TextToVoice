@@ -255,7 +255,8 @@ How English differs from Tamil:
 - **Cleanup keeps** apostrophes ("God's", "didn't"), quotation marks and hyphens. Only merged verse numbers and brackets are removed.
 - **Numbers** are left to Kokoro, which reads digits in English.
 - **Closing quotation marks** stay with the sentence they end (`…?"'`). Pieces with no letters are merged into the previous piece. Without this, nested quotes in John 1 produced an empty piece.
-- **Empty verses:** WEB leaves 5 verses empty (Luke 17:36, Acts 8:37, 15:34, 24:7, Romans 16:25). They are skipped, so those verse numbers have no timing entry.
+- **Empty verses:** WEB leaves 5 verses empty (Luke 17:36, Acts 8:37, 15:34, 24:7, Romans 16:25). They have no audio, but the JSON still lists them as zero-length entries (`start_ms == end_ms`, `"omitted_in_source": true`), and `verse_timing.omitted_verses` names them, so every chapter covers all its verse numbers. Players should skip zero-length entries when highlighting.
+- **Highlighting detail:** Heart's books have sentence-level pieces (`chunk_sample_boundaries`), like Tamil. Michael's books are verse-level only, by choice, because each verse is read as one passage.
 - **Verse numbering** matches the Tamil Bible everywhere except Romans 14:24–26 and 16:25–27, where the closing doxology sits in a different place.
 
 ## Using other languages

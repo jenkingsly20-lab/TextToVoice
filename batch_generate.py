@@ -112,6 +112,27 @@ def chapter_text(db, number, name, chapter):
     # The database contains HTML entities such as &quot; and &#39; in some verses.
     return f'{name} {chapter}\n' + '\n'.join(f'{verse} {html.unescape(text).strip()}' for verse, text in verses), len(verses)
 
+def add_omitted_verses(record, db, number, chapter):
+    """List verses that are empty in the source text (e.g. WEB Luke 17:36) as zero-length entries
+    marked omitted_in_source, so the JSON covers every verse number in the chapter.
+
+    A placeholder sits where the next verse starts (or at the end of the chapter), so the
+    timeline stays contiguous: start_ms == end_ms == speech_end_ms."""
+    present = {v['verse_number'] for v in record['verses']}
+    omitted = [verse for verse, text in verses_of(db, number, chapter) if not text.strip() and verse not in present]
+    if not omitted:
+        return record
+    verses = [dict(v) for v in record['verses']]
+    for verse in omitted:
+        later = [v['start_ms'] for v in verses if v['verse_number'] > verse and not v.get('omitted_in_source')]
+        at = min(later) if later else record['total_duration_ms']
+        verses.append(dict(verse_number=verse, start_ms=at, end_ms=at, speech_end_ms=at, omitted_in_source=True))
+    record['verses'] = sorted(verses, key=lambda v: v['verse_number'])
+    record['verse_timing'] = dict(record['verse_timing'], omitted_verses=omitted,
+        omitted_note='These verse numbers are empty in the source text, so they have no audio; '
+                     'their entries are zero-length (start_ms == end_ms) and marked omitted_in_source.')
+    return record
+
 def write_index(folder, number, name, identifier, quality):
     chapters = []
     # Numeric order: a plain name sort puts psalms_100 before psalms_11.
@@ -359,6 +380,7 @@ def main():
                 continue
             mp3, manifest = job['folder'] / f'{job["stem"]}.mp3', job['folder'] / f'{job["stem"]}.json'
             record['output_directory'] = str(job['folder'].resolve())
+            add_omitted_verses(record, db, job['number'], job['chapter'])
             temporary = manifest.with_suffix('.json.tmp')
             temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')
             shutil.copyfile(produced, mp3)
