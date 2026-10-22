@@ -159,6 +159,36 @@ def keep_awake(enabled):
     flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED if enabled else 0)
     ctypes.windll.kernel32.SetThreadExecutionState(flags)
 
+def pid_alive(pid):
+    if os.name == 'nt':  # os.kill(pid, 0) would terminate the process on Windows
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def acquire_lock(out):
+    """One batch run per output folder: two runs duplicate work, fight over the CPU/GPU and lock files."""
+    lock = Path(out) / '.batch.lock'
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        other = int(lock.read_text().strip())
+    except (OSError, ValueError):
+        other = None
+    if other and other != os.getpid() and pid_alive(other):
+        sys.exit(f'Another batch run (process {other}) is already writing to {Path(out).resolve()}. '
+                 'Wait for it or stop it first (Ctrl+C in its window).')
+    lock.write_text(str(os.getpid()))
+    return lock
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--books', help='Comma-separated: john,matthew or 43,40 or Tamil names; nt / ot / all')
@@ -194,7 +224,7 @@ def main():
 
     # Plan every chapter up front so progress and time left cover the whole run.
     out = Path(args.out)
-    aliases = {key: key for key in ENGLISH_VOICES} if english else VOICE_ALIASES
+    aliases = dict({key: key for key in ENGLISH_VOICES}, default='female') if english else VOICE_ALIASES
     voices = [aliases.get(v.strip(), v.strip()) for v in (args.voices or args.voice).split(',') if v.strip()]
     from services.default_voice import installed_voice_configs
     valid = list(ENGLISH_VOICES) if english else list(installed_voice_configs())
@@ -235,6 +265,7 @@ def main():
     if not jobs:
         print('Nothing to do.')
         return
+    acquire_lock(out)  # released implicitly: a lock left by an exited process is ignored
     print('Ctrl+C once = stop after this chapter · twice = stop now · run again to resume')
     if not args.allow_sleep:
         keep_awake(True)
