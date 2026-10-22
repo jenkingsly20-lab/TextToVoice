@@ -18,7 +18,27 @@ def respond(data):
     protocol_out.write(json.dumps(data, ensure_ascii=True) + '\n')
     protocol_out.flush()
 
+def disable_power_throttling():
+    """Opt out of Windows 11 EcoQoS: a window-less background process can otherwise be
+    held at low clock speeds / efficiency cores, which made CPU inference ~3x slower."""
+    if sys.platform != 'win32':
+        return
+    import ctypes
+    from ctypes import wintypes
+    class PowerThrottlingState(ctypes.Structure):
+        _fields_ = [('Version', wintypes.ULONG), ('ControlMask', wintypes.ULONG), ('StateMask', wintypes.ULONG)]
+    PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
+    state = PowerThrottlingState(1, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, 0)  # control speed, never throttle
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE  # a 64-bit pseudo-handle; the int default truncates it
+    kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    process = kernel32.GetCurrentProcess()
+    kernel32.SetProcessInformation(process, 4, ctypes.byref(state), ctypes.sizeof(state))  # ProcessPowerThrottling
+    kernel32.SetPriorityClass(process, 0x8000)  # ABOVE_NORMAL_PRIORITY_CLASS
+
 def main():
+    disable_power_throttling()
     import numpy as np
     from kokoro_onnx import Kokoro
     kokoro = Kokoro(str(MODEL), str(VOICES))
