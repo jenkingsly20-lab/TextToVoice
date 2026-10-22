@@ -7,3 +7,4 @@ model_cache/
 *.log
 reference_audio/
 engine_sources/
+handoff/english/
